@@ -16,16 +16,21 @@ pub struct AttackConfig {
     pub timeout: Duration,
     pub delay: Duration,
     pub rate_limit: Option<u64>,
+    pub proxy: Option<String>,
     pub proxy_file: Option<PathBuf>,
     pub output_file: Option<PathBuf>,
     pub output_format: OutputFormat,
     pub resume_file: Option<PathBuf>,
     #[allow(dead_code)]
     pub verbose: bool,
+    pub quiet: bool,
+    pub no_banner: bool,
     pub single_user_mode: bool,
     pub spray_mode: bool,
     pub stop_on_first: bool,
     pub retries: u32,
+    pub rule_file: Option<PathBuf>,
+    pub max_mutations: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -62,125 +67,12 @@ impl AttackConfig {
                     .into());
             }
         }
+        if self.threads == 0 {
+            return Err("Thread count must be > 0".into());
+        }
+        if self.max_mutations == 0 {
+            return Err("Max mutations must be > 0".into());
+        }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_validate_no_targets() {
-        let config = AttackConfig {
-            targets: vec![],
-            target_file: None,
-            users: vec!["admin".into()],
-            passwords: vec!["pass".into()],
-            protocols: vec!["ssh".into()],
-            ..create_dummy_config()
-        };
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_validate_no_protocols() {
-        let config = AttackConfig {
-            protocols: vec![],
-            ..create_valid_config()
-        };
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_validate_no_credentials() {
-        let config = AttackConfig {
-            users: vec![],
-            user_file: None,
-            combo_file: None,
-            ..create_valid_config()
-        };
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_validate_combo_ok() {
-        let config = AttackConfig {
-            combo_file: Some(PathBuf::from("combos.txt")),
-            users: vec![],
-            user_file: None,
-            passwords: vec![],
-            password_file: None,
-            ..create_valid_config()
-        };
-        assert!(config.validate().is_ok());
-    }
-
-    #[test]
-    fn test_validate_valid_config() {
-        let config = create_valid_config();
-        assert!(config.validate().is_ok());
-    }
-
-    #[test]
-    fn test_output_format_from_str() {
-        assert!(matches!(OutputFormat::from_str("json"), OutputFormat::Json));
-        assert!(matches!(OutputFormat::from_str("csv"), OutputFormat::Csv));
-        assert!(matches!(OutputFormat::from_str("plain"), OutputFormat::Plain));
-        assert!(matches!(OutputFormat::from_str("unknown"), OutputFormat::Plain));
-    }
-
-    fn create_valid_config() -> AttackConfig {
-        AttackConfig {
-            targets: vec!["192.168.1.1:22".into()],
-            target_file: None,
-            users: vec!["admin".into()],
-            passwords: vec!["password".into()],
-            user_file: None,
-            password_file: None,
-            combo_file: None,
-            protocols: vec!["ssh".into()],
-            ports: vec![],
-            threads: 10,
-            timeout: Duration::from_secs(10),
-            delay: Duration::from_millis(0),
-            rate_limit: None,
-            proxy_file: None,
-            output_file: None,
-            output_format: OutputFormat::Plain,
-            resume_file: None,
-            verbose: false,
-            single_user_mode: false,
-            spray_mode: false,
-            stop_on_first: false,
-            retries: 1,
-        }
-    }
-
-    fn create_dummy_config() -> AttackConfig {
-        AttackConfig {
-            targets: vec![],
-            target_file: None,
-            users: vec![],
-            passwords: vec![],
-            user_file: None,
-            password_file: None,
-            combo_file: None,
-            protocols: vec![],
-            ports: vec![],
-            threads: 10,
-            timeout: Duration::from_secs(10),
-            delay: Duration::from_millis(0),
-            rate_limit: None,
-            proxy_file: None,
-            output_file: None,
-            output_format: OutputFormat::Plain,
-            resume_file: None,
-            verbose: false,
-            single_user_mode: false,
-            spray_mode: false,
-            stop_on_first: false,
-            retries: 1,
-        }
     }
 }

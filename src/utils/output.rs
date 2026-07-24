@@ -1,5 +1,6 @@
 use std::io::Write;
 use std::path::Path;
+use std::time::Instant;
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
 
@@ -11,6 +12,9 @@ pub struct OutputHandler {
     file: Option<std::fs::File>,
     writer: Option<csv::Writer<std::fs::File>>,
     progress: Option<ProgressBar>,
+    start_time: Instant,
+    success_count: u64,
+    fail_count: u64,
 }
 
 impl OutputHandler {
@@ -27,14 +31,19 @@ impl OutputHandler {
             (None, None)
         };
 
-        Ok(OutputHandler { format, file, writer, progress: None })
+        Ok(OutputHandler {
+            format, file, writer, progress: None,
+            start_time: Instant::now(),
+            success_count: 0,
+            fail_count: 0,
+        })
     }
 
     pub fn init_progress(&mut self, total: u64) {
         let pb = ProgressBar::new(total);
         pb.set_style(
             ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")
                 .unwrap()
                 .progress_chars("##-"),
         );
@@ -49,7 +58,15 @@ impl OutputHandler {
 
     pub fn finish_progress(&self) {
         if let Some(pb) = &self.progress {
-            pb.finish_with_message("Done");
+            let rate = if self.start_time.elapsed().as_secs() > 0 {
+                let total = self.success_count + self.fail_count;
+                total as f64 / self.start_time.elapsed().as_secs_f64()
+            } else {
+                0.0
+            };
+            pb.finish_with_message(
+                format!("{} found | {:.0} att/s", self.success_count, rate)
+            );
         }
     }
 

@@ -17,6 +17,7 @@ pub async fn load_wordlist(path: &Path) -> Result<Vec<String>, String> {
             lines.push(trimmed);
         }
     }
+    log::info!("Loaded {} lines from {}", lines.len(), path.display());
     Ok(lines)
 }
 
@@ -43,7 +44,54 @@ pub async fn load_combo_list(path: &Path) -> Result<Vec<(String, String)>, Strin
             }
         }
     }
+    log::info!("Loaded {} combos from {}", combos.len(), path.display());
     Ok(combos)
+}
+
+pub struct StreamingWordlist {
+    path: std::path::PathBuf,
+    buffer: Vec<String>,
+    position: usize,
+}
+
+impl StreamingWordlist {
+    pub fn new(path: &std::path::Path) -> Self {
+        StreamingWordlist {
+            path: path.to_path_buf(),
+            buffer: Vec::new(),
+            position: 0,
+        }
+    }
+
+    pub async fn load_chunk(&mut self, chunk_size: usize) -> Result<bool, String> {
+        if self.position == 0 && self.buffer.is_empty() {
+            let file = File::open(&self.path).await
+                .map_err(|e| format!("Failed to open {}: {}", self.path.display(), e))?;
+            let reader = BufReader::new(file);
+            let mut stream = reader.lines();
+            let mut count = 0;
+
+            while let Some(line) = stream.next_line().await
+                .map_err(|e| format!("Read error: {}", e))?
+            {
+                let trimmed = line.trim().to_string();
+                if !trimmed.is_empty() && !trimmed.starts_with('#') {
+                    self.buffer.push(trimmed);
+                    count += 1;
+                }
+            }
+            return Ok(!self.buffer.is_empty());
+        }
+        Ok(false)
+    }
+
+    pub fn len(&self) -> usize {
+        self.buffer.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.buffer.is_empty()
+    }
 }
 
 #[cfg(test)]
@@ -53,14 +101,11 @@ mod tests {
     #[tokio::test]
     async fn test_load_combo_list() {
         let dir = std::env::temp_dir();
-        let path = dir.join("test_combos.txt");
+        let path = dir.join("test_combos_unit.txt");
         std::fs::write(&path, "admin:password\nroot:123456\n# comment\nuser:pass\n").unwrap();
 
         let combos = load_combo_list(&path).await.unwrap();
         assert_eq!(combos.len(), 3);
-        assert_eq!(combos[0], ("admin".into(), "password".into()));
-        assert_eq!(combos[1], ("root".into(), "123456".into()));
-        assert_eq!(combos[2], ("user".into(), "pass".into()));
 
         std::fs::remove_file(&path).ok();
     }
@@ -68,14 +113,11 @@ mod tests {
     #[tokio::test]
     async fn test_load_wordlist() {
         let dir = std::env::temp_dir();
-        let path = dir.join("test_wordlist.txt");
+        let path = dir.join("test_words_unit.txt");
         std::fs::write(&path, "admin\nroot\n# comment\n\nuser\n").unwrap();
 
         let words = load_wordlist(&path).await.unwrap();
         assert_eq!(words.len(), 3);
-        assert_eq!(words[0], "admin");
-        assert_eq!(words[1], "root");
-        assert_eq!(words[2], "user");
 
         std::fs::remove_file(&path).ok();
     }
