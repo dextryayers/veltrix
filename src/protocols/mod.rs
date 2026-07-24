@@ -39,7 +39,8 @@ pub trait Protocol: Send + Sync {
 }
 
 pub fn get_protocol(name: &str) -> Option<Box<dyn Protocol>> {
-    match name.to_lowercase().as_str() {
+    let lower = name.to_lowercase();
+    match lower.as_str() {
         "ssh" => Some(Box::new(ssh::SshProtocol)),
         "ftp" => Some(Box::new(ftp::FtpProtocol)),
         "telnet" => Some(Box::new(telnet::TelnetProtocol)),
@@ -57,7 +58,40 @@ pub fn get_protocol(name: &str) -> Option<Box<dyn Protocol>> {
         "snmp" => Some(Box::new(snmp::SnmpProtocol)),
         "imap" => Some(Box::new(imap::ImapProtocol)),
         "vnc" => Some(Box::new(vnc::VncProtocol)),
-        _ => None,
+        _ => {
+            // Check external plugin registry
+            if let Some(entry) = crate::core::plugin::get_plugin(&lower) {
+                Some(Box::new(PluginProtocol { entry }))
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Wrapper that makes a PluginEntry implement the Protocol trait
+struct PluginProtocol {
+    entry: crate::core::plugin::PluginEntry,
+}
+
+#[async_trait]
+impl Protocol for PluginProtocol {
+    fn name(&self) -> &'static str {
+        Box::leak(self.entry.name.clone().into_boxed_str())
+    }
+
+    fn default_port(&self) -> u16 {
+        self.entry.default_port
+    }
+
+    async fn authenticate(
+        &self,
+        target: &Target,
+        credential: &Credential,
+        timeout: Duration,
+        proxy: &Option<crate::proxy::ProxyConfig>,
+    ) -> AuthResult {
+        crate::core::plugin::execute_plugin(&self.entry, target, credential, timeout, proxy).await
     }
 }
 

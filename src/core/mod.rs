@@ -4,6 +4,7 @@ pub mod config;
 pub mod config_loader;
 pub mod credential;
 pub mod error;
+pub mod plugin;
 pub mod result;
 pub mod rules;
 pub mod target;

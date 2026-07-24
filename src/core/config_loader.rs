@@ -362,6 +362,15 @@ mod tests {
             rule_file: None,
             max_mutations: 500,
             max_password_len: None,
+            distributed: None,
+            distributed_token: None,
+            distributed_name: None,
+            plugins: vec![],
+            api_bind: None,
+            encrypt: false,
+            encrypt_passphrase: None,
+            decrypt_file: None,
+            decrypt_output: None,
         }
     }
 

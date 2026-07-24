@@ -4,6 +4,12 @@ use std::time::Duration;
 use super::error::AttackError;
 
 #[derive(Clone, Debug)]
+pub enum DistributedMode {
+    Coordinator { bind: String },
+    Worker { connect: String },
+}
+
+#[derive(Clone, Debug)]
 pub struct AttackConfig {
     pub targets: Vec<String>,
     pub target_file: Option<PathBuf>,
@@ -41,6 +47,19 @@ pub struct AttackConfig {
     pub rule_file: Option<PathBuf>,
     pub max_mutations: usize,
     pub max_password_len: Option<usize>,
+    // Distributed mode
+    pub distributed: Option<DistributedMode>,
+    pub distributed_token: Option<String>,
+    pub distributed_name: Option<String>,
+    // Plugin system
+    pub plugins: Vec<String>,
+    // REST API
+    pub api_bind: Option<String>,
+    // Encrypted output
+    pub encrypt: bool,
+    pub encrypt_passphrase: Option<String>,
+    pub decrypt_file: Option<std::path::PathBuf>,
+    pub decrypt_output: Option<std::path::PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -64,6 +83,46 @@ impl OutputFormat {
 
 impl AttackConfig {
     pub fn validate(&self) -> Result<(), AttackError> {
+        if let Some(ref mode) = self.distributed {
+            match mode {
+                DistributedMode::Coordinator { .. } => {
+                    if self.targets.is_empty() && self.target_file.is_none() {
+                        return Err(AttackError::config(
+                            "Coordinator requires targets. Use --target or --target-file.",
+                        ));
+                    }
+                    if self.protocols.is_empty() {
+                        return Err(AttackError::config(
+                            "Coordinator requires protocols. Use --protocol.",
+                        ));
+                    }
+                    if self.combo_file.is_none() && self.users.is_empty() && self.user_file.is_none() {
+                        return Err(AttackError::config(
+                            "Coordinator requires users. Use --user, --user-file, or --combo.",
+                        ));
+                    }
+                    if self.combo_file.is_none() && self.passwords.is_empty() && self.password_file.is_none() {
+                        return Err(AttackError::config(
+                            "Coordinator requires passwords. Use --password, --password-file, or --combo.",
+                        ));
+                    }
+                    if self.distributed_token.is_none() {
+                        return Err(AttackError::config(
+                            "Coordinator requires --distributed-token for worker authentication.",
+                        ));
+                    }
+                }
+                DistributedMode::Worker { .. } => {
+                    if self.distributed_token.is_none() {
+                        return Err(AttackError::config(
+                            "Worker requires --distributed-token for authentication.",
+                        ));
+                    }
+                }
+            }
+            return Ok(());
+        }
+
         if self.targets.is_empty() && self.target_file.is_none() {
             return Err(AttackError::config(
                 "No targets specified. Use --target or --target-file.",
@@ -141,6 +200,15 @@ mod tests {
             rule_file: None,
             max_mutations: 500,
             max_password_len: None,
+            distributed: None,
+            distributed_token: None,
+            distributed_name: None,
+            plugins: vec![],
+            api_bind: None,
+            encrypt: false,
+            encrypt_passphrase: None,
+            decrypt_file: None,
+            decrypt_output: None,
         }
     }
 

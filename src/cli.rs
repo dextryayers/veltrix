@@ -7,6 +7,7 @@ use std::path::Path;
 use crate::core::config::{AttackConfig, OutputFormat};
 use crate::core::config_loader::ConfigFile;
 use crate::core::error::AttackError;
+use crate::utils::wordlist_gen::WordlistConfig;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -141,6 +142,68 @@ pub struct CliArgs {
     #[arg(long = "config", help = "JSON config file", value_name = "FILE")]
     pub config: Option<PathBuf>,
 
+    // ── Distributed Mode Options ──
+    #[arg(long = "distributed-coordinator", help = "Run as coordinator on addr:port (e.g. 0.0.0.0:8443)", value_name = "BIND")]
+    pub distributed_coordinator: Option<String>,
+
+    #[arg(long = "distributed-worker", help = "Run as worker, connect to coordinator addr:port", value_name = "ADDR")]
+    pub distributed_worker: Option<String>,
+
+    #[arg(long = "distributed-token", help = "Auth token for coordinator↔worker communication", value_name = "TOKEN")]
+    pub distributed_token: Option<String>,
+
+    #[arg(long = "distributed-name", help = "Worker hostname (defaults to OS hostname)", value_name = "NAME")]
+    pub distributed_name: Option<String>,
+
+    // ── Plugin Options ──
+    #[arg(long = "plugin", help = "External plugin binary path (repeatable)", value_name = "PATH")]
+    pub plugins: Vec<String>,
+
+    // ── REST API Options ──
+    #[arg(long = "api", help = "Start REST API server on addr:port (e.g. 127.0.0.1:8080)", value_name = "BIND")]
+    pub api_bind: Option<String>,
+
+    // ── Encrypted Output Options ──
+    #[arg(long = "encrypt", help = "Encrypt output file with AES-256-GCM")]
+    pub encrypt: bool,
+
+    #[arg(long = "encrypt-passphrase", help = "Passphrase for encryption (prompted if not provided)", value_name = "PASSPHRASE")]
+    pub encrypt_passphrase: Option<String>,
+
+    #[arg(long = "decrypt", help = "Decrypt an encrypted file", value_name = "FILE")]
+    pub decrypt_file: Option<PathBuf>,
+
+    #[arg(long = "decrypt-output", help = "Output path for decrypted file (default: stdout)", value_name = "FILE")]
+    pub decrypt_output: Option<PathBuf>,
+
+    // ── Wordlist Generation Options ──
+    #[arg(long = "gen-wordlist", help = "Generate a wordlist from target information")]
+    pub gen_wordlist: bool,
+
+    #[arg(long = "wl-name", help = "Target name (e.g. 'John Smith')", value_name = "NAME")]
+    pub wl_name: Option<String>,
+
+    #[arg(long = "wl-company", help = "Company name", value_name = "COMPANY")]
+    pub wl_company: Option<String>,
+
+    #[arg(long = "wl-dob", help = "Date of birth (YYYY-MM-DD)", value_name = "DATE")]
+    pub wl_dob: Option<String>,
+
+    #[arg(long = "wl-keyword", help = "Additional keyword (repeatable)", value_name = "WORD")]
+    pub wl_keywords: Vec<String>,
+
+    #[arg(long = "wl-min-len", help = "Minimum password length", default_value = "4", value_name = "N")]
+    pub wl_min_len: usize,
+
+    #[arg(long = "wl-max-len", help = "Maximum password length", default_value = "32", value_name = "N")]
+    pub wl_max_len: usize,
+
+    #[arg(long = "wl-no-leet", help = "Disable leet speak variations")]
+    pub wl_no_leet: bool,
+
+    #[arg(long = "wl-output", help = "Write wordlist to file (default: stdout)", value_name = "FILE")]
+    pub wl_output: Option<PathBuf>,
+
     // ── Behavior Options ──
     #[arg(long = "stop-on-first", help = "Stop after first success per target")]
     pub stop_on_first: bool,
@@ -158,6 +221,13 @@ pub struct CliArgs {
 
 impl CliArgs {
     pub fn into_config(self) -> Result<AttackConfig, AttackError> {
+        let distributed = match (&self.distributed_coordinator, &self.distributed_worker) {
+            (Some(bind), None) => Some(crate::core::config::DistributedMode::Coordinator { bind: bind.clone() }),
+            (None, Some(addr)) => Some(crate::core::config::DistributedMode::Worker { connect: addr.clone() }),
+            (Some(_), Some(_)) => return Err(AttackError::config("Cannot be both coordinator and worker")),
+            (None, None) => None,
+        };
+
         let mut config = AttackConfig {
             targets: Vec::new(),
             target_file: None,
@@ -194,6 +264,15 @@ impl CliArgs {
             rule_file: None,
             max_mutations: 500,
             max_password_len: None,
+            distributed,
+            distributed_token: self.distributed_token,
+            distributed_name: self.distributed_name,
+            plugins: self.plugins.clone(),
+            api_bind: self.api_bind.clone(),
+            encrypt: self.encrypt,
+            encrypt_passphrase: self.encrypt_passphrase,
+            decrypt_file: self.decrypt_file,
+            decrypt_output: self.decrypt_output,
         };
 
         if let Some(ref config_path) = self.config {
@@ -302,6 +381,18 @@ impl CliArgs {
         }
 
         Ok(config)
+    }
+
+    pub fn to_wordlist_config(&self) -> WordlistConfig {
+        WordlistConfig {
+            name: self.wl_name.clone(),
+            company: self.wl_company.clone(),
+            dob: self.wl_dob.clone(),
+            keywords: self.wl_keywords.clone(),
+            min_len: self.wl_min_len,
+            max_len: self.wl_max_len,
+            leet: !self.wl_no_leet,
+        }
     }
 
     pub fn should_show_banner(&self) -> bool {

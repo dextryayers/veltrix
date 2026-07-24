@@ -93,6 +93,16 @@ impl AttackOrchestrator {
         })
     }
 
+    /// Load targets for distributed coordinator (public access from main.rs)
+    pub async fn load_targets_for_distributed(config: &AttackConfig) -> Result<Vec<Target>, AttackError> {
+        Self::load_targets(config).await
+    }
+
+    /// Load credentials for distributed coordinator (public access from main.rs)
+    pub async fn load_credentials_for_distributed(config: &AttackConfig) -> Result<Vec<Credential>, AttackError> {
+        Self::load_credentials(config).await
+    }
+
     async fn load_targets(config: &AttackConfig) -> Result<Vec<Target>, AttackError> {
         let mut target_strings: Vec<String> = Vec::new();
 
