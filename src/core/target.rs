@@ -3,6 +3,7 @@ use std::str::FromStr;
 use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use colored::Colorize;
+use super::error::AttackError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Target {
@@ -27,21 +28,21 @@ impl Target {
         format!("{}:{} [{}]", self.host.cyan(), self.port.to_string().yellow(), self.protocol.green())
     }
 
-    pub async fn resolve(&mut self, timeout: Duration) -> Result<(), String> {
+    pub async fn resolve(&mut self, timeout: Duration) -> Result<(), AttackError> {
         let addr_str = format!("{}:{}", self.host, self.port);
         let host_clone = self.host.clone();
         match tokio::time::timeout(timeout, async {
             tokio::task::spawn_blocking(move || {
                 addr_str.to_socket_addrs()
-            }).await.map_err(|e| format!("Join error: {}", e))?
-                .map_err(|e| format!("DNS error: {}", e))
+            }).await
+                .map_err(|e| AttackError::internal(format!("Join error: {}", e)))?                .map_err(|e| AttackError::dns(&host_clone, format!("DNS error: {}", e)))
         }).await {
             Ok(Ok(mut addrs)) => {
                 self.address = addrs.next();
                 Ok(())
             }
-            Ok(Err(e)) => Err(format!("Failed to resolve {}: {}", host_clone, e)),
-            Err(_) => Err(format!("Timeout resolving {}", host_clone)),
+            Ok(Err(e)) => Err(AttackError::dns(&host_clone, e.to_string())),
+            Err(_) => Err(AttackError::dns(&host_clone, format!("Timeout resolving {}", host_clone))),
         }
     }
 
@@ -55,16 +56,16 @@ impl Target {
 }
 
 impl FromStr for Target {
-    type Err = String;
+    type Err = AttackError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parts: Vec<&str> = s.split(':').collect();
         if parts.len() < 2 {
-            return Err("Invalid target format. Use host:port".into());
+            return Err(AttackError::config("Invalid target format. Use host:port"));
         }
         let port = parts.last()
             .and_then(|p| p.parse::<u16>().ok())
-            .ok_or_else(|| "Invalid port number".to_string())?;
+            .ok_or_else(|| AttackError::config("Invalid port number"))?;
         let host = parts[..parts.len()-1].join(":");
         Ok(Target::new(host, port, ""))
     }
@@ -140,13 +141,13 @@ mod tests {
 
     #[test]
     fn test_target_parse_invalid_no_port() {
-        let result: Result<Target, String> = "192.168.1.1".parse();
+        let result: Result<Target, AttackError> = "192.168.1.1".parse();
         assert!(result.is_err());
     }
 
     #[test]
     fn test_target_parse_invalid_port() {
-        let result: Result<Target, String> = "host:abc".parse();
+        let result: Result<Target, AttackError> = "host:abc".parse();
         assert!(result.is_err());
     }
 

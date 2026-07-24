@@ -1,5 +1,7 @@
 use std::net::Ipv4Addr;
 
+use super::error::AttackError;
+
 #[derive(Debug, Clone)]
 pub enum TargetSpec {
     Single { host: String, port: Option<u16> },
@@ -8,7 +10,7 @@ pub enum TargetSpec {
 }
 
 impl TargetSpec {
-    pub fn parse(input: &str) -> Result<Self, String> {
+    pub fn parse(input: &str) -> Result<Self, AttackError> {
         let input = input.trim();
 
         let (addr_part, port) = if let Some(pos) = input.rfind(':') {
@@ -29,21 +31,21 @@ impl TargetSpec {
         if addr_part.contains('/') {
             let parts: Vec<&str> = addr_part.splitn(2, '/').collect();
             let network: Ipv4Addr = parts[0].parse()
-                .map_err(|_| format!("Invalid IP address: {}", parts[0]))?;
+                .map_err(|_| AttackError::config(format!("Invalid IP address: {}", parts[0])))?;
             let prefix: u8 = parts[1].parse()
-                .map_err(|_| format!("Invalid CIDR prefix: {}", parts[1]))?;
+                .map_err(|_| AttackError::config(format!("Invalid CIDR prefix: {}", parts[1])))?;
             if prefix > 32 {
-                return Err("CIDR prefix must be 0-32".into());
+                return Err(AttackError::config("CIDR prefix must be 0-32"));
             }
             Ok(TargetSpec::Cidr { network, prefix, port })
         } else if addr_part.contains('-') {
             let parts: Vec<&str> = addr_part.splitn(2, '-').collect();
             let start: Ipv4Addr = parts[0].parse()
-                .map_err(|_| format!("Invalid start IP: {}", parts[0]))?;
+                .map_err(|_| AttackError::config(format!("Invalid start IP: {}", parts[0])))?;
             let end: Ipv4Addr = parts[1].parse()
-                .map_err(|_| format!("Invalid end IP: {}", parts[1]))?;
+                .map_err(|_| AttackError::config(format!("Invalid end IP: {}", parts[1])))?;
             if u32_from_ip(end) < u32_from_ip(start) {
-                return Err("End IP must be >= start IP".into());
+                return Err(AttackError::config("End IP must be >= start IP"));
             }
             Ok(TargetSpec::Range { start, end, port })
         } else {
@@ -65,7 +67,6 @@ impl TargetSpec {
         }
     }
 
-    #[allow(dead_code)]
     pub fn host_count(&self) -> u64 {
         match self {
             TargetSpec::Single { .. } => 1,

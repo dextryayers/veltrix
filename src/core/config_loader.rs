@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use super::config::AttackConfig;
+use super::error::AttackError;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -51,6 +52,7 @@ pub struct CredentialsSection {
     pub combo_file: Option<String>,
     pub single_user: bool,
     pub spray: bool,
+    pub max_password_len: Option<usize>,
 }
 
 impl Default for CredentialsSection {
@@ -63,6 +65,7 @@ impl Default for CredentialsSection {
             combo_file: None,
             single_user: false,
             spray: false,
+            max_password_len: None,
         }
     }
 }
@@ -160,11 +163,11 @@ impl Default for BehaviorSection {
 }
 
 impl ConfigFile {
-    pub fn load(path: &Path) -> Result<Self, String> {
+    pub fn load(path: &Path) -> Result<Self, AttackError> {
         let content = std::fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read config file '{}': {}", path.display(), e))?;
+            .map_err(|e| AttackError::io("config", format!("Failed to read '{}': {}", path.display(), e)))?;
         serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse config file '{}': {}", path.display(), e))
+            .map_err(|e| AttackError::config(format!("Failed to parse config '{}': {}", path.display(), e)))
     }
 
     pub fn merge_into(self, config: &mut AttackConfig) {
@@ -203,6 +206,9 @@ impl ConfigFile {
         }
         if c.spray {
             config.spray_mode = true;
+        }
+        if let Some(n) = c.max_password_len {
+            config.max_password_len = Some(n);
         }
 
         let h = self.hybrid;
@@ -262,5 +268,156 @@ impl ConfigFile {
         if let Some(v) = b.no_banner {
             config.no_banner = v;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn write_temp_config(content: &str) -> (std::path::PathBuf, std::fs::File) {
+        let dir = std::env::temp_dir();
+        let path = dir.join("test_veltrix_config.json");
+        let mut f = std::fs::File::create(&path).unwrap();
+        write!(f, "{}", content).unwrap();
+        (path, f)
+    }
+
+    #[test]
+    fn test_load_valid_config() {
+        let json = r#"{
+            "attack": { "targets": ["10.0.0.1:22"], "protocols": ["ssh"] },
+            "credentials": { "users": ["admin"], "passwords": ["pass"] }
+        }"#;
+        let (path, _f) = write_temp_config(json);
+        let cf = ConfigFile::load(&path).unwrap();
+        assert_eq!(cf.attack.targets, vec!["10.0.0.1:22"]);
+        assert_eq!(cf.attack.protocols, vec!["ssh"]);
+        assert_eq!(cf.credentials.users, vec!["admin"]);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_load_invalid_config_fails() {
+        let (path, _f) = write_temp_config("not valid json");
+        assert!(ConfigFile::load(&path).is_err());
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_merge_into_targets() {
+        let mut cfg = AttackConfig {
+            targets: vec![],
+            target_file: None,
+            users: vec![],
+            passwords: vec![],
+            user_file: None,
+            password_file: None,
+            combo_file: None,
+            protocols: vec![],
+            ports: vec![],
+            threads: 10,
+            timeout: std::time::Duration::from_secs(5),
+            delay: std::time::Duration::ZERO,
+            rate_limit: None,
+            proxy: None,
+            proxy_file: None,
+            output_file: None,
+            output_format: super::config::OutputFormat::Plain,
+            resume_file: None,
+            config_file: None,
+            checkpoint_interval: 100,
+            verbose: false,
+            quiet: false,
+            no_banner: false,
+            single_user_mode: false,
+            spray_mode: false,
+            stop_on_first: false,
+            retries: 1,
+            rule_file: None,
+            max_mutations: 500,
+            max_password_len: None,
+        };
+        let cf = ConfigFile {
+            attack: AttackSection {
+                targets: vec!["10.0.0.1:22".into()],
+                target_file: None,
+                protocols: vec!["ssh".into()],
+                ports: vec![],
+            },
+            credentials: CredentialsSection {
+                users: vec!["admin".into()],
+                passwords: vec!["pass".into()],
+                user_file: None,
+                password_file: None,
+                combo_file: None,
+                single_user: false,
+                spray: false,
+                max_password_len: None,
+            },
+            hybrid: HybridSection { rules: None, max_mutations: None },
+            performance: PerformanceSection {
+                threads: None, timeout: None, delay: None,
+                rate_limit: None, retries: None,
+            },
+            proxy: ProxySection { proxy: None, proxy_file: None },
+            output: OutputSection { file: None, format: None, resume: None },
+            behavior: BehaviorSection {
+                stop_on_first: None, verbose: None,
+                quiet: None, no_banner: None,
+            },
+        };
+        cf.merge_into(&mut cfg);
+        assert_eq!(cfg.targets, vec!["10.0.0.1:22"]);
+        assert_eq!(cfg.protocols, vec!["ssh"]);
+        assert_eq!(cfg.users, vec!["admin"]);
+        assert_eq!(cfg.passwords, vec!["pass"]);
+    }
+
+    #[test]
+    fn test_merge_into_performance_overrides() {
+        let json = r#"{
+            "performance": { "threads": 50, "timeout": 30, "retries": 3 }
+        }"#;
+        let (path, _f) = write_temp_config(json);
+        let cf = ConfigFile::load(&path).unwrap();
+        let mut cfg = AttackConfig {
+            targets: vec!["10.0.0.1:22".into()],
+            target_file: None,
+            users: vec!["admin".into()],
+            passwords: vec!["pass".into()],
+            user_file: None,
+            password_file: None,
+            combo_file: None,
+            protocols: vec!["ssh".into()],
+            ports: vec![],
+            threads: 10,
+            timeout: std::time::Duration::from_secs(5),
+            delay: std::time::Duration::ZERO,
+            rate_limit: None,
+            proxy: None,
+            proxy_file: None,
+            output_file: None,
+            output_format: super::config::OutputFormat::Plain,
+            resume_file: None,
+            config_file: None,
+            checkpoint_interval: 100,
+            verbose: false,
+            quiet: false,
+            no_banner: false,
+            single_user_mode: false,
+            spray_mode: false,
+            stop_on_first: false,
+            retries: 1,
+            rule_file: None,
+            max_mutations: 500,
+            max_password_len: None,
+        };
+        cf.merge_into(&mut cfg);
+        assert_eq!(cfg.threads, 50);
+        assert_eq!(cfg.timeout.as_secs(), 30);
+        assert_eq!(cfg.retries, 3);
+        std::fs::remove_file(&path).ok();
     }
 }

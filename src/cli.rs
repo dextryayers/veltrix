@@ -6,6 +6,7 @@ use colored::Colorize;
 use std::path::Path;
 use crate::core::config::{AttackConfig, OutputFormat};
 use crate::core::config_loader::ConfigFile;
+use crate::core::error::AttackError;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -101,6 +102,9 @@ pub struct CliArgs {
     #[arg(long = "retries", help = "Connection retries", default_value = "1", value_name = "N")]
     pub retries: u32,
 
+    #[arg(long = "max-password-len", help = "Truncate passwords to N characters", value_name = "N")]
+    pub max_password_len: Option<usize>,
+
     // ── Proxy Options ──
     #[arg(long = "proxy", help = "Proxy: type://host[:port]", value_name = "PROXY")]
     pub proxy: Option<String>,
@@ -112,7 +116,7 @@ pub struct CliArgs {
     #[arg(short = 'o', long = "output", help = "Write results to FILE", value_name = "FILE")]
     pub output: Option<PathBuf>,
 
-    #[arg(short = 'f', long = "format", help = "Output format: plain, json, csv", default_value = "plain", value_name = "FMT")]
+    #[arg(short = 'f', long = "format", help = "Output format: plain, json, csv, html", default_value = "plain", value_name = "FMT")]
     pub format: String,
 
     #[arg(long = "resume", help = "Resume from session file", value_name = "FILE")]
@@ -140,7 +144,7 @@ pub struct CliArgs {
 }
 
 impl CliArgs {
-    pub fn into_config(self) -> Result<AttackConfig, String> {
+    pub fn into_config(self) -> Result<AttackConfig, AttackError> {
         let mut config = AttackConfig {
             targets: Vec::new(),
             target_file: None,
@@ -171,6 +175,7 @@ impl CliArgs {
             retries: 1,
             rule_file: None,
             max_mutations: 500,
+            max_password_len: None,
         };
 
         if let Some(ref config_path) = self.config {
@@ -179,7 +184,7 @@ impl CliArgs {
                 let cf = ConfigFile::load(path)?;
                 cf.merge_into(&mut config);
             } else {
-                return Err(format!("Config file not found: {}", config_path.display()));
+                return Err(AttackError::config(format!("Config file not found: {}", config_path.display())));
             }
         }
 
@@ -231,6 +236,9 @@ impl CliArgs {
         }
         if self.retries != 1 {
             config.retries = self.retries;
+        }
+        if let Some(max_len) = self.max_password_len {
+            config.max_password_len = Some(max_len);
         }
         if self.proxy.is_some() {
             config.proxy = self.proxy;

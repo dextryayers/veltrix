@@ -2,15 +2,17 @@ use std::path::Path;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::fs::File;
 
-pub async fn load_wordlist(path: &Path) -> Result<Vec<String>, String> {
+use super::error::AttackError;
+
+pub async fn load_wordlist(path: &Path) -> Result<Vec<String>, AttackError> {
     let file = File::open(path).await
-        .map_err(|e| format!("Failed to open {}: {}", path.display(), e))?;
+        .map_err(|e| AttackError::wordlist(path.to_path_buf(), e.to_string()))?;
     let reader = BufReader::new(file);
     let mut lines = Vec::new();
     let mut stream = reader.lines();
 
     while let Some(line) = stream.next_line().await
-        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?
+        .map_err(|e| AttackError::wordlist(path.to_path_buf(), format!("Read error: {}", e)))?
     {
         let trimmed = line.trim().to_string();
         if !trimmed.is_empty() && !trimmed.starts_with('#') {
@@ -21,15 +23,15 @@ pub async fn load_wordlist(path: &Path) -> Result<Vec<String>, String> {
     Ok(lines)
 }
 
-pub async fn load_combo_list(path: &Path) -> Result<Vec<(String, String)>, String> {
+pub async fn load_combo_list(path: &Path) -> Result<Vec<(String, String)>, AttackError> {
     let file = File::open(path).await
-        .map_err(|e| format!("Failed to open {}: {}", path.display(), e))?;
+        .map_err(|e| AttackError::wordlist(path.to_path_buf(), e.to_string()))?;
     let reader = BufReader::new(file);
     let mut combos = Vec::new();
     let mut stream = reader.lines();
 
     while let Some(line) = stream.next_line().await
-        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?
+        .map_err(|e| AttackError::wordlist(path.to_path_buf(), format!("Read error: {}", e)))?
     {
         let line = line.trim().to_string();
         if line.is_empty() || line.starts_with('#') {
@@ -48,14 +50,12 @@ pub async fn load_combo_list(path: &Path) -> Result<Vec<(String, String)>, Strin
     Ok(combos)
 }
 
-#[allow(dead_code)]
 pub struct StreamingWordlist {
     path: std::path::PathBuf,
     buffer: Vec<String>,
     position: usize,
 }
 
-#[allow(dead_code)]
 impl StreamingWordlist {
     pub fn new(path: &std::path::Path) -> Self {
         StreamingWordlist {
@@ -65,14 +65,14 @@ impl StreamingWordlist {
         }
     }
 
-    pub async fn load_chunk(&mut self, _chunk_size: usize) -> Result<bool, String> {
+    pub async fn load_chunk(&mut self, _chunk_size: usize) -> Result<bool, AttackError> {
         if self.position == 0 && self.buffer.is_empty() {
             let file = File::open(&self.path).await
-                .map_err(|e| format!("Failed to open {}: {}", self.path.display(), e))?;
+                .map_err(|e| AttackError::wordlist(self.path.clone(), e.to_string()))?;
             let reader = BufReader::new(file);
             let mut stream = reader.lines();
             while let Some(line) = stream.next_line().await
-                .map_err(|e| format!("Read error: {}", e))?
+                .map_err(|e| AttackError::wordlist(self.path.clone(), format!("Read error: {}", e)))?
             {
                 let trimmed = line.trim().to_string();
                 if !trimmed.is_empty() && !trimmed.starts_with('#') {

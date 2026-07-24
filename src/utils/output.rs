@@ -5,6 +5,7 @@ use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::core::config::OutputFormat;
+use crate::core::error::AttackError;
 use crate::core::result::{AttackSummary, AuthResult};
 
 pub struct OutputHandler {
@@ -15,18 +16,19 @@ pub struct OutputHandler {
     start_time: Instant,
     success_count: u64,
     fail_count: u64,
-    #[allow(dead_code)]
     quiet: bool,
     verbose: bool,
 }
 
 impl OutputHandler {
-    pub fn new(format: OutputFormat, output_path: Option<&Path>, quiet: bool, verbose: bool) -> Result<Self, String> {
+    pub fn new(format: OutputFormat, output_path: Option<&Path>, quiet: bool, verbose: bool) -> Result<Self, AttackError> {
         let (file, writer) = if let Some(path) = output_path {
             let f = std::fs::File::create(path)
-                .map_err(|e| format!("Cannot create output file: {}", e))?;
+                .map_err(|e| AttackError::io("output", format!("Cannot create: {}", e)))?;
             let w = match format {
-                OutputFormat::Csv => Some(csv::Writer::from_writer(f.try_clone().map_err(|_| "Cannot clone file".to_string())?)),
+                OutputFormat::Csv => Some(csv::Writer::from_writer(
+                    f.try_clone().map_err(|e| AttackError::io("output", e.to_string()))?
+                )),
                 _ => None,
             };
             (Some(f), w)
@@ -109,6 +111,9 @@ impl OutputHandler {
                         let _ = writer.flush();
                     }
                 }
+                OutputFormat::Html => {
+                    let _ = writeln!(file, "{}", result.display());
+                }
                 OutputFormat::Plain => {
                     let _ = writeln!(file, "{}", result.display());
                 }
@@ -145,5 +150,68 @@ impl OutputHandler {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::result::AttackSummary;
+    use chrono::Utc;
+    use std::time::Duration;
+
+    #[test]
+    fn test_new_no_file() {
+        let h = OutputHandler::new(OutputFormat::Plain, None, false, false).unwrap();
+        assert!(h.file.is_none());
+        assert!(h.writer.is_none());
+    }
+
+    #[test]
+    fn test_new_with_file() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("test_output.txt");
+        let h = OutputHandler::new(OutputFormat::Plain, Some(&path), false, false).unwrap();
+        assert!(h.file.is_some());
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_write_result_increments_counters() {
+        let mut h = OutputHandler::new(OutputFormat::Plain, None, false, false).unwrap();
+        let r = AuthResult::new(
+            "10.0.0.1".into(), 22, "ssh",
+            "admin".into(), "pass".into(),
+            true, Duration::from_millis(50), None,
+        );
+        h.write_result(&r);
+        assert_eq!(h.success_count, 1);
+        assert_eq!(h.fail_count, 0);
+    }
+
+    #[test]
+    fn test_write_summary_does_not_panic() {
+        let mut h = OutputHandler::new(OutputFormat::Plain, None, true, false).unwrap();
+        let summary = AttackSummary {
+            start_time: Utc::now(),
+            end_time: Some(Utc::now()),
+            total_targets: 1,
+            total_credentials: 10,
+            attempts: 10,
+            successes: 1,
+            failures: 9,
+            errors: 0,
+            results: vec![],
+            total_duration: Some(Duration::from_secs(5)),
+        };
+        h.write_summary(&summary);
+    }
+
+    #[test]
+    fn test_progress_tracking() {
+        let mut h = OutputHandler::new(OutputFormat::Plain, None, true, false).unwrap();
+        h.init_progress(100);
+        h.inc_progress();
+        h.finish_progress();
     }
 }

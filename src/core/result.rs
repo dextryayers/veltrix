@@ -38,7 +38,7 @@ impl AuthResult {
             timestamp: Utc::now(),
             duration_ms: duration.as_millis() as u64,
             error,
-            r#type: String::new(),
+            r#type: "password".to_string(),
         }
     }
 

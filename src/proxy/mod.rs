@@ -2,6 +2,7 @@ use std::fmt;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use crate::core::error::AttackError;
 
 #[derive(Debug, Clone)]
 pub enum ProxyConfig {
@@ -28,11 +29,11 @@ pub enum ProxyConfig {
 }
 
 impl ProxyConfig {
-    pub fn parse(input: &str) -> Result<Self, String> {
+    pub fn parse(input: &str) -> Result<Self, AttackError> {
         let input = input.trim();
 
         let colon_slash = input.find("://")
-            .ok_or_else(|| "Invalid proxy format. Use type://host:port".to_string())?;
+            .ok_or_else(|| AttackError::config("Invalid proxy format. Use type://host:port"))?;
         let type_str = input[..colon_slash].to_lowercase();
         let rest = &input[colon_slash + 3..];
 
@@ -45,11 +46,11 @@ impl ProxyConfig {
         };
 
         let colon_pos = host_port.rfind(':')
-            .ok_or_else(|| "Proxy must specify port".to_string())?;
+            .ok_or_else(|| AttackError::config("Proxy must specify port"))?;
         let host = host_port[..colon_pos].to_string();
         let port_str = &host_port[colon_pos + 1..];
         let port: u16 = port_str.parse()
-            .map_err(|_| "Invalid proxy port".to_string())?;
+            .map_err(|_| AttackError::config("Invalid proxy port"))?;
 
         match type_str.as_str() {
             "http" => {
@@ -68,7 +69,9 @@ impl ProxyConfig {
                 let (username, password) = parse_auth(auth);
                 Ok(ProxyConfig::Socks5 { host, port, username, password })
             }
-            _ => Err(format!("Unsupported proxy type: {}. Use http, socks4, or socks5.", type_str)),
+            _ => Err(AttackError::config(
+                format!("Unsupported proxy type: {}. Use http, socks4, or socks5.", type_str)
+            )),
         }
     }
 
@@ -520,9 +523,9 @@ mod tests {
     }
 }
 
-pub fn load_proxy_list(path: &std::path::Path) -> Result<Vec<ProxyConfig>, String> {
+pub fn load_proxy_list(path: &std::path::Path) -> Result<Vec<ProxyConfig>, AttackError> {
     let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read proxy file: {}", e))?;
+        .map_err(|e| AttackError::io("proxy", format!("Failed to read proxy file: {}", e)))?;
 
     let mut proxies = Vec::new();
     for line in content.lines() {

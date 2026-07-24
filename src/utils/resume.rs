@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 use serde::{Deserialize, Serialize};
+use crate::core::error::AttackError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionState {
@@ -65,18 +66,18 @@ impl SessionState {
         });
     }
 
-    pub fn save(&self, path: &Path) -> Result<(), String> {
+    pub fn save(&self, path: &Path) -> Result<(), AttackError> {
         let json = serde_json::to_string_pretty(self)
-            .map_err(|e| format!("Serialization error: {}", e))?;
+            .map_err(|e| AttackError::session(format!("Serialization: {}", e)))?;
         std::fs::write(path, json)
-            .map_err(|e| format!("Failed to write session file: {}", e))
+            .map_err(|e| AttackError::session(format!("Write failed: {}", e)))
     }
 
-    pub fn load(path: &Path) -> Result<Self, String> {
+    pub fn load(path: &Path) -> Result<Self, AttackError> {
         let json = std::fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read session file: {}", e))?;
+            .map_err(|e| AttackError::session(format!("Read failed: {}", e)))?;
         serde_json::from_str(&json)
-            .map_err(|e| format!("Failed to parse session file: {}", e))
+            .map_err(|e| AttackError::session(format!("Parse failed: {}", e)))
     }
 }
 

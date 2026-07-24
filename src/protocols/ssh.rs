@@ -1,7 +1,8 @@
 use async_trait::async_trait;
-use std::net::TcpStream;
 use std::time::{Duration, Instant};
 use ssh2::Session;
+use tokio::net::TcpStream;
+use tokio::time::timeout;
 
 use crate::core::credential::Credential;
 use crate::core::result::AuthResult;
@@ -25,75 +26,70 @@ impl Protocol for SshProtocol {
         &self,
         target: &Target,
         credential: &Credential,
-        timeout: Duration,
-        _proxy: &Option<ProxyConfig>,
+        timeout_dur: Duration,
+        proxy: &Option<ProxyConfig>,
     ) -> AuthResult {
         let start = Instant::now();
-        let target_c = target.clone();
-        let cred = credential.clone();
-        let timeout_c = timeout;
+        let addr = target.addr_string();
 
-        let result = tokio::task::spawn_blocking(move || {
-            let _addr = target_c.addr_string();
-            match TcpStream::connect_timeout(
-                &format!("{}:{}", target_c.host, target_c.port).parse().unwrap_or_else(|_| {
-                    std::net::SocketAddr::new("0.0.0.0".parse().unwrap(), target_c.port)
-                }),
-                timeout_c,
-            ) {
-                Ok(stream) => {
-                    stream.set_read_timeout(Some(timeout_c)).ok();
-                    stream.set_write_timeout(Some(timeout_c)).ok();
-                    let mut session = Session::new().unwrap();
-                    session.set_tcp_stream(stream);
-                    session.handshake().ok();
-                    match session.userauth_password(&cred.username, &cred.password) {
-                        Ok(()) => AuthResult::new(
-                            target_c.host.clone(),
-                            target_c.port,
-                            "ssh",
-                            cred.username.clone(),
-                            cred.password.clone(),
-                            true,
-                            start.elapsed(),
-                            None,
-                        ),
-                        Err(e) => AuthResult::new(
-                            target_c.host.clone(),
-                            target_c.port,
-                            "ssh",
-                            cred.username.clone(),
-                            cred.password.clone(),
-                            false,
-                            start.elapsed(),
-                            Some(e.to_string()),
-                        ),
-                    }
+        let connect_result = match timeout(timeout_dur, async {
+            let stream = match proxy {
+                Some(p) => p.tcp_connect(&addr, timeout_dur).await
+                    .map_err(|e| format!("Proxy connect: {}", e))?,
+                None => TcpStream::connect(&addr).await
+                    .map_err(|e| format!("Connect: {}", e))?,
+            };
+
+            let std_stream = stream.into_std()
+                .map_err(|e| format!("Stream conversion: {}", e))?;
+
+            let target_c = target.clone();
+            let username = credential.username.clone();
+            let password = credential.password.clone();
+            let timeout_c = timeout_dur;
+
+            let result: Result<AuthResult, String> = tokio::task::spawn_blocking(move || {
+                std_stream.set_read_timeout(Some(timeout_c)).ok();
+                std_stream.set_write_timeout(Some(timeout_c)).ok();
+                let mut session = Session::new().unwrap();
+                session.set_tcp_stream(std_stream);
+                if session.handshake().is_err() {
+                    return Ok(AuthResult::new(
+                        target_c.host.clone(), target_c.port, "ssh",
+                        username, password,
+                        false, start.elapsed(), Some("SSH handshake failed".into()),
+                    ));
                 }
-                Err(e) => AuthResult::new(
-                    target_c.host.clone(),
-                    target_c.port,
-                    "ssh",
-                    cred.username.clone(),
-                    cred.password.clone(),
-                    false,
-                    start.elapsed(),
-                    Some(format!("Connection failed: {}", e)),
-                ),
-            }
-        }).await;
+                match session.userauth_password(&username, &password) {
+                    Ok(()) => Ok(AuthResult::new(
+                        target_c.host.clone(), target_c.port, "ssh",
+                        username, password,
+                        true, start.elapsed(), None,
+                    )),
+                    Err(e) => Ok(AuthResult::new(
+                        target_c.host.clone(), target_c.port, "ssh",
+                        username, password,
+                        false, start.elapsed(), Some(e.to_string()),
+                    )),
+                }
+            }).await.map_err(|e| format!("Task error: {}", e))?;
 
-        match result {
+            result
+        }).await {
+            Ok(r) => r,
+            Err(_) => return AuthResult::new(
+                target.host.clone(), target.port, "ssh",
+                credential.username.clone(), credential.password.clone(),
+                false, start.elapsed(), Some("Timeout".into()),
+            ),
+        };
+
+        match connect_result {
             Ok(r) => r,
             Err(e) => AuthResult::new(
-                target.host.clone(),
-                target.port,
-                "ssh",
-                credential.username.clone(),
-                credential.password.clone(),
-                false,
-                start.elapsed(),
-                Some(format!("Task error: {}", e)),
+                target.host.clone(), target.port, "ssh",
+                credential.username.clone(), credential.password.clone(),
+                false, start.elapsed(), Some(e),
             ),
         }
     }

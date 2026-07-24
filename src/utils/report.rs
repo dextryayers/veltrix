@@ -1,6 +1,7 @@
+use std::path::Path;
 use crate::core::result::AttackSummary;
+use crate::core::error::AttackError;
 
-#[allow(dead_code)]
 pub fn generate_html_report(summary: &AttackSummary) -> String {
     let duration_str = summary.total_duration
         .map(|d| format!("{:.2}s", d.as_secs_f64()))
@@ -61,7 +62,7 @@ pub fn generate_html_report(summary: &AttackSummary) -> String {
 </style>
 </head>
 <body>
-<h1>🔐 Veltrix Attack Report</h1>
+<h1>Veltrix Attack Report</h1>
 <div class="summary">
   <div class="stat success"><div class="value">{}</div><div class="label">Successes</div></div>
   <div class="stat fail"><div class="value">{}</div><div class="label">Failures</div></div>
@@ -71,13 +72,13 @@ pub fn generate_html_report(summary: &AttackSummary) -> String {
   <div class="stat"><div class="value">{}</div><div class="label">Duration</div></div>
 </div>
 
-<h2>✅ Successes ({} found)</h2>
+<h2>Successes ({} found)</h2>
 <table>
 <thead><tr><th>Host</th><th>Port</th><th>Protocol</th><th>Username</th><th>Password</th><th>Timestamp</th><th>ms</th></tr></thead>
 <tbody>{}
 </tbody></table>
 
-<h2>❌ Failures ({} shown)</h2>
+<h2>Failures ({} shown)</h2>
 <table>
 <thead><tr><th>Host</th><th>Port</th><th>Protocol</th><th>Username</th><th>Password</th><th>Error</th></tr></thead>
 <tbody>{}
@@ -103,4 +104,63 @@ pub fn generate_html_report(summary: &AttackSummary) -> String {
         summary.start_time.format("%Y-%m-%d %H:%M:%S"),
         summary.attempts,
     )
+}
+
+pub fn save_html_report(path: &Path, summary: &AttackSummary) -> Result<(), AttackError> {
+    let html = generate_html_report(summary);
+    std::fs::write(path, html)
+        .map_err(|e| AttackError::io("report", format!("Failed to write HTML report: {}", e)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::result::AttackSummary;
+    use chrono::Utc;
+    use std::time::Duration;
+
+    fn sample_summary() -> AttackSummary {
+        AttackSummary {
+            start_time: Utc::now(),
+            end_time: Some(Utc::now()),
+            total_targets: 2,
+            total_credentials: 10,
+            attempts: 20,
+            successes: 1,
+            failures: 19,
+            errors: 0,
+            results: vec![],
+            total_duration: Some(Duration::from_secs(5)),
+        }
+    }
+
+    #[test]
+    fn test_generate_html_report_contains_summary_stats() {
+        let html = generate_html_report(&sample_summary());
+        assert!(html.contains("Successes"));
+        assert!(html.contains("Failures"));
+        assert!(html.contains("Targets"));
+        assert!(html.contains("Credentials"));
+        assert!(html.contains("Veltrix"));
+    }
+
+    #[test]
+    fn test_generate_html_report_empty_results() {
+        let summary = sample_summary();
+        let html = generate_html_report(&summary);
+        assert!(html.contains("1")); // successes
+        assert!(html.contains("19")); // failures
+    }
+
+    #[test]
+    fn test_save_html_report_creates_file() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("test_report.html");
+        let r = save_html_report(&path, &sample_summary());
+        assert!(r.is_ok());
+        assert!(path.exists());
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("Veltrix"));
+        std::fs::remove_file(&path).ok();
+    }
 }

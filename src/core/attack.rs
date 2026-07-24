@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -7,6 +8,7 @@ use futures::future::join_all;
 use super::cidr::expand_targets;
 use super::config::AttackConfig;
 use super::credential::Credential;
+use super::error::AttackError;
 use super::result::{AttackSummary, AuthResult};
 use super::rules::{apply_rules, load_rules};
 use super::target::{parse_targets, Target};
@@ -16,6 +18,7 @@ use crate::proxy::{load_proxy_list, ProxyConfig};
 use crate::utils::output::OutputHandler;
 use crate::utils::patterns::{classify_error, ResponseCategory};
 use crate::utils::ratelimit::{JitterDelay, RateLimiter};
+use crate::utils::report::save_html_report;
 use crate::utils::resume::SessionState;
 
 pub struct AttackOrchestrator {
@@ -32,7 +35,7 @@ pub struct AttackOrchestrator {
 }
 
 impl AttackOrchestrator {
-    pub async fn new(config: AttackConfig, running: Arc<AtomicBool>) -> Result<Self, String> {
+    pub async fn new(config: AttackConfig, running: Arc<AtomicBool>) -> Result<Self, AttackError> {
         config.validate()?;
 
         let targets = Self::load_targets(&config).await?;
@@ -75,7 +78,7 @@ impl AttackOrchestrator {
         })
     }
 
-    async fn load_targets(config: &AttackConfig) -> Result<Vec<Target>, String> {
+    async fn load_targets(config: &AttackConfig) -> Result<Vec<Target>, AttackError> {
         let mut target_strings: Vec<String> = Vec::new();
 
         if let Some(file_path) = &config.target_file {
@@ -110,6 +113,13 @@ impl AttackOrchestrator {
 
         let mut targets = parse_targets(&target_strings, &protocols, &ports);
 
+        let before = targets.len();
+        let mut seen = HashSet::new();
+        targets.retain(|t| seen.insert((t.host.clone(), t.port, t.protocol.clone())));
+        if targets.len() < before {
+            log::info!("Removed {} duplicate targets", before - targets.len());
+        }
+
         let resolve_futures: Vec<_> = targets.iter_mut().map(|t| {
             let timeout = config.timeout;
             async move {
@@ -121,14 +131,14 @@ impl AttackOrchestrator {
         join_all(resolve_futures).await;
 
         if targets.is_empty() {
-            return Err("No valid targets after parsing".into());
+            return Err(AttackError::config("No valid targets after parsing"));
         }
 
         log::info!("Loaded {} targets ({} after expansion)", config.targets.len(), targets.len());
         Ok(targets)
     }
 
-    async fn load_credentials(config: &AttackConfig) -> Result<Vec<Credential>, String> {
+    async fn load_credentials(config: &AttackConfig) -> Result<Vec<Credential>, AttackError> {
         let mut credentials = Vec::new();
 
         if let Some(combo_path) = &config.combo_file {
@@ -144,7 +154,7 @@ impl AttackOrchestrator {
         } else if let Some(user_path) = &config.user_file {
             load_wordlist(user_path).await?
         } else {
-            return Err("No users provided".into());
+            return Err(AttackError::config("No users provided"));
         };
 
         let passwords = if !config.passwords.is_empty() {
@@ -172,11 +182,11 @@ impl AttackOrchestrator {
                 base_passwords
             }
         } else {
-            return Err("No passwords provided".into());
+            return Err(AttackError::config("No passwords provided"));
         };
 
         if users.is_empty() || passwords.is_empty() {
-            return Err("Empty user or password list".into());
+            return Err(AttackError::config("Empty user or password list"));
         }
 
         credentials = build_credentials(config, &users, &passwords);
@@ -336,28 +346,57 @@ impl AttackOrchestrator {
         };
 
         self.output.write_summary(&summary);
+
+        if matches!(self.config.output_format, crate::core::config::OutputFormat::Html) {
+            if let Some(ref output_path) = self.config.output_file {
+                let html_path = if output_path.extension().map_or(true, |e| e != "html") {
+                    output_path.with_extension("html")
+                } else {
+                    output_path.clone()
+                };
+                if let Err(e) = save_html_report(&html_path, &summary) {
+                    log::error!("Failed to save HTML report: {}", e);
+                } else {
+                    log::info!("HTML report saved to {}", html_path.display());
+                }
+            } else {
+                log::info!("HTML report:\n{}", crate::utils::report::generate_html_report(&summary));
+            }
+        }
+
         summary
     }
 }
 
 fn build_credentials(config: &AttackConfig, users: &[String], passwords: &[String]) -> Vec<Credential> {
     let mut credentials = Vec::new();
+    let max_len = config.max_password_len.unwrap_or(usize::MAX);
+    let truncate = |s: &str| -> String {
+        if s.len() > max_len {
+            let t: String = s.chars().take(max_len).collect();
+            log::trace!("Truncated password from {} to {} chars", s.len(), max_len);
+            t
+        } else {
+            s.to_string()
+        }
+    };
+
     if config.spray_mode {
         for pass in passwords {
             for user in users {
-                credentials.push(Credential::new(user.clone(), pass.clone()));
+                credentials.push(Credential::new(user.clone(), truncate(pass)));
             }
         }
     } else if config.single_user_mode {
         if let Some(user) = users.first() {
             for pass in passwords {
-                credentials.push(Credential::new(user.clone(), pass.clone()));
+                credentials.push(Credential::new(user.clone(), truncate(pass)));
             }
         }
     } else {
         for user in users {
             for pass in passwords {
-                credentials.push(Credential::new(user.clone(), pass.clone()));
+                credentials.push(Credential::new(user.clone(), truncate(pass)));
             }
         }
     }
