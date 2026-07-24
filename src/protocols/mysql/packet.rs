@@ -1,4 +1,4 @@
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 
 pub async fn read_packet(stream: &mut TcpStream) -> Result<Vec<u8>, String> {

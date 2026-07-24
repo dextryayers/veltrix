@@ -1,367 +1,295 @@
-use sha2::{Sha256, Digest};
-use hmac::{Hmac, Mac};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use std::io::Cursor;
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use md4::{Md4, Digest as Md4Digest};
+use hmac::{Hmac, Mac, KeyInit};
+use sha2::Sha256;
 
-type HmacSha256 = Hmac<Sha256>;
-
-fn get_rand_bytes(len: usize) -> Vec<u8> {
-    let mut v = Vec::with_capacity(len);
-    for _ in 0..len {
-        v.push(rand::random::<u8>());
-    }
-    v
+pub fn to_utf16_le(s: &str) -> Vec<u8> {
+    s.encode_utf16().flat_map(|c| c.to_le_bytes()).collect()
 }
 
-pub struct CredSSP_NTLM_AUTH {
-    pub username: String,
-    pub password: String,
-    pub domain: String,
-    pub host: String,
+pub fn ntlm_hash(password: &str) -> Vec<u8> {
+    let utf16 = to_utf16_le(password);
+    Md4::digest(&utf16).to_vec()
 }
 
-pub async fn rdpmux_client_info(
-    writer: &mut (impl AsyncWriteExt + Unpin),
-    reader: &mut (impl AsyncReadExt + Unpin),
-    username: &str,
-) -> Result<(), String> {
-    let mut packet = Vec::new();
-    packet.write_u16::<LittleEndian>(1).unwrap();
-    packet.write_u16::<LittleEndian>(0).unwrap();
-    let core_data = [
-        0x00, 0x08, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01,
-        0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01,
-        0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01,
-        0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01,
-        0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01,
-        0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01,
-        0x00, 0x01, 0x00, 0x01,
-    ];
-    packet.extend_from_slice(&core_data);
+pub fn ntlmv2_hash(password: &str, username: &str, domain: &str) -> Vec<u8> {
+    let hash = ntlm_hash(password);
+    let upper = username.to_uppercase();
+    let mut ident = to_utf16_le(&upper);
+    ident.extend_from_slice(&to_utf16_le(domain));
 
-    let cs_data = write_ts_cs_cluster_data();
-    packet.extend_from_slice(&cs_data);
-
-    let mut gcc_header = Vec::new();
-    gcc_header.extend_from_slice(b"RDPBCR");
-    gcc_header.write_u16::<LittleEndian>(packet.len() as u16).unwrap();
-    let gcc_len = gcc_header.len() + packet.len() + 8;
-
-    let mut connect_pdu = Vec::new();
-    connect_pdu.extend_from_slice(&[0x03, 0x00, 0x00, 0x0c]);
-    connect_pdu.write_u16::<LittleEndian>(0x0006).unwrap();
-    connect_pdu.write_u16::<LittleEndian>(gcc_len as u16).unwrap();
-    connect_pdu.extend_from_slice(&gcc_header);
-    connect_pdu.extend_from_slice(&packet);
-
-    let tpkt_len = connect_pdu.len() + 4;
-    let mut tpkt = Vec::new();
-    tpkt.extend_from_slice(&[0x03, 0x00, (tpkt_len >> 8) as u8, tpkt_len as u8]);
-    tpkt.extend_from_slice(&connect_pdu);
-
-    writer.write_all(&tpkt).await.map_err(|e| format!("Write CI: {}", e))?;
-    writer.flush().await.ok();
-
-    let mut resp = vec![0u8; 1024];
-    let _ = reader.read(&mut resp).await.map_err(|e| format!("Read CI resp: {}", e))?;
-
-    Ok(())
-}
-
-fn write_ts_cs_cluster_data() -> Vec<u8> {
-    let mut data = Vec::new();
-    data.write_u32::<LittleEndian>(0x00000004).unwrap();
-    data.write_u32::<LittleEndian>(0x00000000).unwrap();
-    data.write_u32::<LittleEndian>(0x00000000).unwrap();
-    data
-}
-
-fn ntlm_hash(password: &str) -> Vec<u8> {
-    let encoded: Vec<u16> = password.encode_utf16().collect();
-    let encoded_bytes: Vec<u8> = encoded.iter()
-        .flat_map(|c| c.to_le_bytes())
-        .collect();
-    let hash = md4::Md4::digest(&encoded_bytes);
-    hash.to_vec()
-}
-
-fn ntlm_v2_hash(password: &str, username: &str, domain: &str) -> Vec<u8> {
-    let ntlm_hash_val = ntlm_hash(password);
-    let encoded: Vec<u16> = (username.to_uppercase() + domain).encode_utf16().collect();
-    let encoded_bytes: Vec<u8> = encoded.iter()
-        .flat_map(|c| c.to_le_bytes())
-        .collect();
-    let mut mac = HmacSha256::new_from_slice(&ntlm_hash_val).expect("HMAC init");
-    mac.update(&encoded_bytes);
+    let mut mac = Hmac::<Sha256>::new_from_slice(&hash).unwrap();
+    mac.update(&ident);
     mac.finalize().into_bytes().to_vec()
 }
 
-fn compute_nonce() -> Vec<u8> {
-    get_rand_bytes(8)
-}
+pub fn build_ntlmssp_negotiate(domain: &str, hostname: &str) -> Vec<u8> {
+    let domain_utf16 = to_utf16_le(domain);
+    let host_utf16 = to_utf16_le(hostname);
+    let domain_offset = 64u32 + 16;
+    let host_offset = domain_offset + domain_utf16.len() as u32;
+    let flags: u32 = 0x02880201;
 
-fn compute_timestamp() -> Vec<u8> {
-    let ns = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64;
-    let ft = ns / 100 + 116444736000000000u64;
-    ft.to_le_bytes().to_vec()
-}
-
-fn compute_ntlm_v2_response(
-    ntlm_v2_hash: &[u8],
-    server_challenge: &[u8],
-    target_info: &[u8],
-) -> (Vec<u8>, Vec<u8>) {
-    let nonce = compute_nonce();
-    let timestamp = compute_timestamp();
-
-    let mut nt_proof_str = Vec::new();
-    nt_proof_str.extend_from_slice(&[0x01u8; 1]);
-    nt_proof_str.extend_from_slice(&[0x00u8; 1]);
-    nt_proof_str.extend_from_slice(&timestamp);
-    nt_proof_str.extend_from_slice(&nonce);
-    nt_proof_str.extend_from_slice(&0i32.to_le_bytes());
-    nt_proof_str.extend_from_slice(target_info);
-    nt_proof_str.extend_from_slice(&[0x00u8; 4]);
-    nt_proof_str.extend_from_slice(&[0x00u8; 4]);
-
-    let mut mac = HmacSha256::new_from_slice(ntlm_v2_hash).expect("HMAC init");
-    mac.update(server_challenge);
-    mac.update(&nt_proof_str);
-    let nt_proof_hash = mac.finalize().into_bytes().to_vec();
-
-    let mut ntlm_v2_response = Vec::new();
-    ntlm_v2_response.extend_from_slice(&nt_proof_hash);
-    ntlm_v2_response.extend_from_slice(&nt_proof_str);
-
-    (nt_proof_hash, ntlm_v2_response)
-}
-
-fn generate_neg_token_init(ntlm_v2_hash: &[u8], target_host: &str) -> Vec<u8> {
-    let mut token = Vec::new();
-    token.extend_from_slice(b"NTLMSSP\x00");
-    token.extend_from_slice(&[0x01u8; 1]);
-    token.extend_from_slice(&[0x00u8; 4]);
-
-    let flags = 0x028a0205u32;
-    token.extend_from_slice(&flags.to_le_bytes());
-
-    let domain = "WORKGROUP".to_string();
-    let dom_enc: Vec<u16> = domain.encode_utf16().collect();
-    let dom_bytes: Vec<u8> = dom_enc.iter().flat_map(|c| c.to_le_bytes()).collect();
-    token.extend_from_slice(&dom_bytes.len().to_le_bytes());
-    token.extend_from_slice(&dom_bytes.len().to_le_bytes());
-    token.extend_from_slice(&0i32.to_le_bytes());
-
-    let host_enc: Vec<u16> = target_host.encode_utf16().collect();
-    let host_bytes: Vec<u8> = host_enc.iter().flat_map(|c| c.to_le_bytes()).collect();
-    token.extend_from_slice(&host_bytes.len().to_le_bytes());
-    token.extend_from_slice(&host_bytes.len().to_le_bytes());
-    token.extend_from_slice(&0i32.to_le_bytes());
-
-    token.extend_from_slice(&[0x00u8; 8]);
-
-    token
-}
-
-fn generate_neg_token_auth(
-    ntlm_v2_hash: &[u8],
-    server_challenge: &[u8],
-    target_info: &[u8],
-    username: &str,
-    domain: &str,
-) -> Vec<u8> {
-    let (_, ntlm_v2_resp) = compute_ntlm_v2_response(ntlm_v2_hash, server_challenge, target_info);
-
-    let mut token = Vec::new();
-    token.extend_from_slice(b"NTLMSSP\x00");
-    token.extend_from_slice(&[0x03u8; 1]);
-    token.extend_from_slice(&[0x00u8; 4]);
-
-    let lm_challenge = get_rand_bytes(24);
-    token.extend_from_slice(&lm_challenge.len().to_le_bytes());
-    token.extend_from_slice(&lm_challenge.len().to_le_bytes());
-    token.extend_from_slice(&0i32.to_le_bytes());
-    token.extend_from_slice(&lm_challenge);
-
-    token.extend_from_slice(&ntlm_v2_resp.len().to_le_bytes());
-    token.extend_from_slice(&ntlm_v2_resp.len().to_le_bytes());
-    let nt_offset = token.len() as u32 + 8;
-    token.extend_from_slice(&nt_offset.to_le_bytes());
-    token.extend_from_slice(&ntlm_v2_resp);
-
-    let dom_enc: Vec<u16> = domain.encode_utf16().collect();
-    let dom_bytes: Vec<u8> = dom_enc.iter().flat_map(|c| c.to_le_bytes()).collect();
-    token.extend_from_slice(&dom_bytes.len().to_le_bytes());
-    token.extend_from_slice(&dom_bytes.len().to_le_bytes());
-    let dom_offset = token.len() as u32 + 8;
-    token.extend_from_slice(&dom_offset.to_le_bytes());
-    token.extend_from_slice(&dom_bytes);
-
-    let user_enc: Vec<u16> = username.encode_utf16().collect();
-    let user_bytes: Vec<u8> = user_enc.iter().flat_map(|c| c.to_le_bytes()).collect();
-    token.extend_from_slice(&user_bytes.len().to_le_bytes());
-    token.extend_from_slice(&user_bytes.len().to_le_bytes());
-    let user_offset = token.len() as u32 + 8;
-    token.extend_from_slice(&user_offset.to_le_bytes());
-    token.extend_from_slice(&user_bytes);
-
-    token.extend_from_slice(&[0x00u8; 8]);
-
-    let flags = 0x028a0205u32;
-    token.extend_from_slice(&flags.to_le_bytes());
-
-    token
-}
-
-fn decode_neg_token_challenge(data: &[u8]) -> Result<(Vec<u8>, Vec<u8>), String> {
-    if data.len() < 12 || &data[0..8] != b"NTLMSSP\x00" {
-        return Err("Not NTLMSSP challenge".into());
-    }
-    if data[8] != 0x02 {
-        return Err("Not NTLM challenge type".into());
-    }
-    if data.len() < 48 {
-        return Err("NTLM challenge too short".into());
-    }
-    let server_challenge = data[24..32].to_vec();
-    let target_info_offset = {
-        let mut c = Cursor::new(&data[40..48]);
-        c.read_u32::<LittleEndian>().unwrap_or(0) as usize
-    };
-    let target_info_len = {
-        let mut c = Cursor::new(&data[40..44]);
-        c.read_u16::<LittleEndian>().unwrap_or(0) as usize
-    };
-
-    if target_info_offset > 0 && target_info_len > 0
-        && target_info_offset + target_info_len <= data.len() {
-        let target_info = data[target_info_offset..target_info_offset + target_info_len].to_vec();
-        Ok((server_challenge, target_info))
-    } else {
-        Err("Invalid target info in NTLM challenge".into())
-    }
-}
-
-fn wrap_ts_request(token: &[u8]) -> Vec<u8> {
-    let mut nego_token = Vec::new();
-    nego_token.extend_from_slice(&[0x01u8; 4]);
-    nego_token.extend_from_slice(&(token.len() as u32).to_le_bytes());
-    nego_token.extend_from_slice(token);
-    nego_token
-}
-
-fn wrap_credssp(nego_tokens: &[Vec<u8>]) -> Vec<u8> {
     let mut msg = Vec::new();
-    msg.extend_from_slice(&0x00000000u32.to_le_bytes());
-    msg.extend_from_slice(&(nego_tokens.len() as u32).to_le_bytes());
-    for token in nego_tokens {
-        msg.extend_from_slice(&[0x01u8; 4]);
-        msg.extend_from_slice(&(token.len() as u32).to_le_bytes());
-        msg.extend_from_slice(token);
-    }
+    msg.extend_from_slice(b"NTLMSSP\x00");
+    msg.extend_from_slice(&1u32.to_le_bytes());
+    msg.extend_from_slice(&flags.to_le_bytes());
+    msg.extend_from_slice(&[0u8; 8]);
+    msg.extend_from_slice(&[0u8; 8]);
+    msg.extend_from_slice(&(domain_utf16.len() as u16).to_le_bytes());
+    msg.extend_from_slice(&(domain_utf16.len() as u16).to_le_bytes());
+    msg.extend_from_slice(&domain_offset.to_le_bytes());
+    msg.extend_from_slice(&(host_utf16.len() as u16).to_le_bytes());
+    msg.extend_from_slice(&(host_utf16.len() as u16).to_le_bytes());
+    msg.extend_from_slice(&host_offset.to_le_bytes());
+    msg.extend_from_slice(&[0u8; 8]);
+    msg.extend_from_slice(&domain_utf16);
+    msg.extend_from_slice(&host_utf16);
     msg
 }
 
-async fn send_tpkt(
-    writer: &mut (impl AsyncWriteExt + Unpin),
-    data: &[u8],
-) -> Result<(), String> {
-    let len = data.len() + 4;
-    let mut tpkt = Vec::new();
-    tpkt.extend_from_slice(&[0x03, 0x00, (len >> 8) as u8, len as u8]);
-    tpkt.extend_from_slice(data);
-    writer.write_all(&tpkt).await.map_err(|e| format!("Send: {}", e))?;
-    writer.flush().await.ok();
-    Ok(())
-}
-
-async fn recv_tpkt(reader: &mut (impl AsyncReadExt + Unpin)) -> Result<Vec<u8>, String> {
-    let mut header = [0u8; 4];
-    reader.read_exact(&mut header).await.map_err(|e| format!("Recv header: {}", e))?;
-    if header[0] != 0x03 {
-        return Err(format!("Bad TPKT version: {}", header[0]));
+pub fn parse_ntlmssp_challenge(data: &[u8]) -> Option<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+    if data.len() < 48 || &data[..8] != b"NTLMSSP\x00" {
+        return None;
     }
-    let len = ((header[2] as usize) << 8) | header[3] as usize;
-    if len < 4 {
-        return Err(format!("Bad TPKT len: {}", len));
+    let msg_type = u32::from_le_bytes(data[8..12].try_into().ok()?);
+    if msg_type != 2 {
+        return None;
     }
-    let mut body = vec![0u8; len - 4];
-    if !body.is_empty() {
-        reader.read_exact(&mut body).await.map_err(|e| format!("Recv body: {}", e))?;
+    let server_challenge = data[24..32].to_vec();
+    let target_name_len = u16::from_le_bytes(data[12..14].try_into().ok()?) as usize;
+    let target_name_off = u32::from_le_bytes(data[16..20].try_into().ok()?) as usize;
+    let mut target_name = Vec::new();
+    if target_name_len > 0 && target_name_off + target_name_len <= data.len() {
+        target_name = data[target_name_off..target_name_off + target_name_len].to_vec();
     }
-    Ok(body)
-}
-
-pub async fn generate_rdp_credentials(
-    writer: &mut (impl AsyncWriteExt + Unpin),
-    reader: &mut (impl AsyncReadExt + Unpin),
-    auth: &CredSSP_NTLM_AUTH,
-) -> Result<(), String> {
-    let ntlm_v2_hash_val = ntlm_v2_hash(&auth.password, &auth.username, &auth.domain);
-
-    let neg_init = generate_neg_token_init(&ntlm_v2_hash_val, &auth.host);
-    let ts_req_init = wrap_ts_request(&neg_init);
-    let credssp_init = wrap_credssp(&[ts_req_init]);
-    send_tpkt(writer, &credssp_init).await?;
-
-    let resp = recv_tpkt(reader).await?;
-
-    let mut offset = 0;
-    if resp.len() < 8 {
-        return Err("Response too short".into());
-    }
-    offset += 8;
-
-    let token_count = {
-        let mut c = Cursor::new(&resp[4..8]);
-        c.read_u32::<LittleEndian>().unwrap()
-    };
-    if token_count == 0 {
-        return Err("No tokens in response".into());
-    }
-
-    let mut nego_token = None;
-    for _ in 0..token_count {
-        if offset + 8 > resp.len() {
-            break;
-        }
-        let token_len = {
-            let mut c = Cursor::new(&resp[offset + 4..offset + 8]);
-            c.read_u32::<LittleEndian>().unwrap() as usize
-        };
-        offset += 8;
-        if offset + token_len > resp.len() {
-            return Err("Token truncated".into());
-        }
-        if token_len >= 12 && &resp[offset..offset + 8] == b"NTLMSSP\x00" {
-            nego_token = Some(resp[offset..offset + token_len].to_vec());
-            break;
-        }
-        offset += token_len;
-    }
-
-    let challenge_token = nego_token.ok_or_else(|| "No NTLM challenge".to_string())?;
-    let (server_challenge, target_info) = decode_neg_token_challenge(&challenge_token)?;
-
-    let auth_token = generate_neg_token_auth(
-        &ntlm_v2_hash_val,
-        &server_challenge,
-        &target_info,
-        &auth.username,
-        &auth.domain,
-    );
-    let ts_req_auth = wrap_ts_request(&auth_token);
-    let credssp_auth = wrap_credssp(&[ts_req_auth]);
-    send_tpkt(writer, &credssp_auth).await?;
-
-    let final_resp = recv_tpkt(reader).await?;
-    if final_resp.len() >= 8 {
-        Ok(())
+    let context = if data.len() >= 56 {
+        data[48..56].to_vec()
     } else {
-        Err("Empty final response".into())
+        vec![0u8; 8]
+    };
+    Some((server_challenge, target_name, context))
+}
+
+pub fn build_ntlmv2_auth(
+    password: &str,
+    username: &str,
+    domain: &str,
+    server_challenge: &[u8],
+    target_info: &[u8],
+) -> Vec<u8> {
+    use rand::Rng;
+    let mut client_nonce = [0u8; 8];
+    let mut rng = rand::thread_rng();
+    rng.fill(&mut client_nonce);
+
+    let ntlmv2_hash_val = ntlmv2_hash(password, username, domain);
+
+    let mut blob = Vec::new();
+    blob.extend_from_slice(&[1u8, 1u8, 0u8, 0u8]);
+    blob.extend_from_slice(&[0u8; 4]);
+    blob.extend_from_slice(&0x00000000u64.to_le_bytes());
+    blob.extend_from_slice(&client_nonce);
+    blob.extend_from_slice(&[0u8; 4]);
+    blob.extend_from_slice(target_info);
+    blob.extend_from_slice(&[0u8; 4]);
+    blob.extend_from_slice(&[0u8; 4]);
+    blob.extend_from_slice(&[0u8; 4]);
+
+    let mut proof_input = Vec::new();
+    proof_input.extend_from_slice(&[0u8; 8]);
+    proof_input.extend_from_slice(server_challenge);
+    proof_input.extend_from_slice(&blob);
+
+    let mut mac = Hmac::<Sha256>::new_from_slice(&ntlmv2_hash_val).unwrap();
+    mac.update(&proof_input);
+    let nt_proof = mac.finalize().into_bytes();
+
+    let mut ntlmv2_response = Vec::new();
+    ntlmv2_response.extend_from_slice(&nt_proof);
+    ntlmv2_response.extend_from_slice(&blob);
+
+    let domain_utf16 = to_utf16_le(domain);
+    let user_utf16 = to_utf16_le(username);
+    let host_utf16 = to_utf16_le("WORKSTATION");
+
+    let lmv2_response = client_nonce.to_vec();
+
+    let mut msg = Vec::new();
+    msg.extend_from_slice(b"NTLMSSP\x00");
+    msg.extend_from_slice(&3u32.to_le_bytes());
+    msg.extend_from_slice(&0x02880201u32.to_le_bytes());
+    msg.extend_from_slice(&0x00000000u64.to_le_bytes());
+    msg.extend_from_slice(&0x00000000u64.to_le_bytes());
+
+    let lmv2_len = lmv2_response.len() as u16;
+    let ntlmv2_len = ntlmv2_response.len() as u16;
+    let domain_len = domain_utf16.len() as u16;
+    let user_len = user_utf16.len() as u16;
+    let host_len = host_utf16.len() as u16;
+
+    let mut offset = 64u32 + 8 + 8;
+    let lm_offset = offset;
+    offset += lmv2_len as u32;
+    let nt_offset = offset;
+    offset += ntlmv2_len as u32;
+    let dom_off = offset;
+    offset += domain_len as u32;
+    let user_off = offset;
+    offset += user_len as u32;
+    let host_off = offset;
+
+    msg.extend_from_slice(&lv2_fields(lmv2_len, lm_offset));
+    msg.extend_from_slice(&lv2_fields(ntlmv2_len, nt_offset));
+    msg.extend_from_slice(&lv2_fields(domain_len, dom_off));
+    msg.extend_from_slice(&lv2_fields(user_len, user_off));
+    msg.extend_from_slice(&lv2_fields(host_len, host_off));
+    msg.extend_from_slice(&[0u8; 8]);
+    msg.extend_from_slice(&[0u8; 8]);
+    msg.extend_from_slice(&[0u8; 8]);
+    msg.extend_from_slice(&[0u8; 8]);
+    msg.extend_from_slice(&[0u8; 8]);
+
+    msg.extend_from_slice(&lmv2_response);
+    msg.extend_from_slice(&ntlmv2_response);
+    msg.extend_from_slice(&domain_utf16);
+    msg.extend_from_slice(&user_utf16);
+    msg.extend_from_slice(&host_utf16);
+
+    msg
+}
+
+fn lv2_fields(len: u16, offset: u32) -> Vec<u8> {
+    let mut fields = Vec::with_capacity(8);
+    fields.extend_from_slice(&len.to_le_bytes());
+    fields.extend_from_slice(&len.to_le_bytes());
+    fields.extend_from_slice(&offset.to_le_bytes());
+    fields
+}
+
+fn encode_asn1_length(len: usize) -> Vec<u8> {
+    if len < 128 {
+        return vec![len as u8];
+    }
+    if len < 256 {
+        return vec![0x81u8, len as u8];
+    }
+    let bytes = (len as u16).to_be_bytes();
+    vec![0x82u8, bytes[0], bytes[1]]
+}
+
+fn asn1_sequence(contents: &[u8]) -> Vec<u8> {
+    let mut buf = vec![0x30u8];
+    buf.extend_from_slice(&encode_asn1_length(contents.len()));
+    buf.extend_from_slice(contents);
+    buf
+}
+
+fn asn1_octet_string(data: &[u8]) -> Vec<u8> {
+    let mut buf = vec![0x04u8];
+    buf.extend_from_slice(&encode_asn1_length(data.len()));
+    buf.extend_from_slice(data);
+    buf
+}
+
+fn asn1_context_tag(tag: u8, contents: &[u8]) -> Vec<u8> {
+    let mut buf = vec![tag];
+    buf.extend_from_slice(&encode_asn1_length(contents.len()));
+    buf.extend_from_slice(contents);
+    buf
+}
+
+pub fn build_credssp_tsrequest(nego_token: &[u8]) -> Vec<u8> {
+    let nego_octet = asn1_octet_string(nego_token);
+    let nego_seq = asn1_sequence(&nego_octet);
+    let nego_tagged = asn1_context_tag(0xa0, &nego_seq);
+    asn1_sequence(&nego_tagged)
+}
+
+pub fn build_credssp_tsrequest_auth(nego_token: &[u8], pub_key_auth: &[u8]) -> Vec<u8> {
+    let nego_octet = asn1_octet_string(nego_token);
+    let nego_seq = asn1_sequence(&nego_octet);
+    let nego_tagged = asn1_context_tag(0xa0, &nego_seq);
+
+    let auth_octet = asn1_octet_string(pub_key_auth);
+    let auth_seq = asn1_sequence(&auth_octet);
+    let auth_tagged = asn1_context_tag(0xa2, &auth_seq);
+
+    let mut combined = nego_tagged;
+    combined.extend_from_slice(&auth_tagged);
+    asn1_sequence(&combined)
+}
+
+pub fn parse_asn1_octet_string(data: &[u8]) -> Option<(Vec<u8>, usize)> {
+    if data.is_empty() {
+        return None;
+    }
+    let mut pos = 0;
+    if data[pos] != 0x30 {
+        return None;
+    }
+    pos += 1;
+    let (seq_len, adv) = read_asn1_length(data, pos)?;
+    pos = adv;
+    let seq_end = pos + seq_len;
+    if seq_end > data.len() {
+        return None;
+    }
+    if pos >= seq_end || data[pos] != 0xa0 {
+        return None;
+    }
+    pos += 1;
+    let (_tag_len, adv) = read_asn1_length(data, pos)?;
+    pos = adv;
+    if pos >= data.len() || data[pos] != 0x30 {
+        return None;
+    }
+    pos += 1;
+    let (_inner_len, adv) = read_asn1_length(data, pos)?;
+    pos = adv;
+    if pos >= data.len() || data[pos] != 0x04 {
+        return None;
+    }
+    pos += 1;
+    let (str_len, adv) = read_asn1_length(data, pos)?;
+    pos = adv;
+    let end = pos + str_len;
+    if end > data.len() {
+        return None;
+    }
+    Some((data[pos..end].to_vec(), seq_end))
+}
+
+fn read_asn1_length(data: &[u8], pos: usize) -> Option<(usize, usize)> {
+    if pos >= data.len() {
+        return None;
+    }
+    if data[pos] < 128 {
+        return Some((data[pos] as usize, pos + 1));
+    }
+    let num_bytes = (data[pos] & 0x7f) as usize;
+    if num_bytes == 0 || num_bytes > 4 || pos + num_bytes >= data.len() {
+        return None;
+    }
+    let mut len = 0usize;
+    for i in 0..num_bytes {
+        len = (len << 8) | data[pos + 1 + i] as usize;
+    }
+    Some((len, pos + 1 + num_bytes))
+}
+
+pub fn compute_pub_key_auth(ntlm_response: &[u8]) -> Vec<u8> {
+    Sha256::digest(ntlm_response).to_vec()
+}
+
+pub fn split_domain_user(input: &str) -> (String, String) {
+    if let Some(domain) = super::get_domain() {
+        return (domain.to_string(), input.to_string());
+    }
+    if let Some(idx) = input.find('\\') {
+        let domain = input[..idx].to_string();
+        let user = input[idx + 1..].to_string();
+        (domain, user)
+    } else {
+        ("".to_string(), input.to_string())
     }
 }

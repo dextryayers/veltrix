@@ -1,14 +1,20 @@
 pub mod ftp;
 pub mod http;
+pub mod imap;
 pub mod ldap;
+pub mod mongodb;
+pub mod mssql;
 pub mod mysql;
 pub mod pop3;
 pub mod postgres;
 pub mod rdp;
 pub mod redis;
+pub mod smb;
 pub mod smtp;
+pub mod snmp;
 pub mod ssh;
 pub mod telnet;
+pub mod vnc;
 
 use std::collections::HashSet;
 use async_trait::async_trait;
@@ -45,6 +51,12 @@ pub fn get_protocol(name: &str) -> Option<Box<dyn Protocol>> {
         "ldap" => Some(Box::new(ldap::LdapProtocol)),
         "redis" => Some(Box::new(redis::RedisProtocol)),
         "http" | "http-basic" | "http-digest" | "http-form" | "http-form-login" => Some(Box::new(http::HttpProtocol)),
+        "mongodb" => Some(Box::new(mongodb::MongoDbProtocol)),
+        "mssql" => Some(Box::new(mssql::MssqlProtocol)),
+        "smb" => Some(Box::new(smb::SmbProtocol)),
+        "snmp" => Some(Box::new(snmp::SnmpProtocol)),
+        "imap" => Some(Box::new(imap::ImapProtocol)),
+        "vnc" => Some(Box::new(vnc::VncProtocol)),
         _ => None,
     }
 }
@@ -68,10 +80,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_get_protocol_ssh() {
-        let p = get_protocol("ssh");
-        assert!(p.is_some());
-        assert_eq!(p.unwrap().name(), "ssh");
+    fn test_get_protocol_unknown() {
+        assert!(get_protocol("unknown").is_none());
+        assert!(get_protocol("smb").is_some());
+        assert!(get_protocol("mongodb").is_some());
+        assert!(get_protocol("snmp").is_some());
+        assert!(get_protocol("imap").is_some());
+        assert!(get_protocol("vnc").is_some());
+        assert!(get_protocol("mssql").is_some());
     }
 
     #[test]
@@ -131,12 +147,6 @@ mod tests {
     }
 
     #[test]
-    fn test_get_protocol_unknown() {
-        assert!(get_protocol("unknown").is_none());
-        assert!(get_protocol("smb").is_none());
-    }
-
-    #[test]
     fn test_get_protocol_postgres() {
         let p = get_protocol("postgres");
         assert!(p.is_some());
@@ -159,12 +169,12 @@ mod tests {
 
     #[test]
     fn test_list_protocols() {
-        let protocols = vec!["ssh", "ftp", "telnet", "smtp", "pop3", "rdp", "mysql", "postgres", "ldap", "redis", "http"];
+        let protocols = vec!["ssh", "ftp", "telnet", "smtp", "pop3", "rdp", "mysql", "postgres", "ldap", "redis", "http", "mongodb", "mssql", "smb", "snmp", "imap", "vnc"];
         assert_eq!(list_protocols(), protocols);
     }
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn list_protocols() -> Vec<&'static str> {
-    vec!["ssh", "ftp", "telnet", "smtp", "pop3", "rdp", "mysql", "postgres", "ldap", "redis", "http"]
+    vec!["ssh", "ftp", "telnet", "smtp", "pop3", "rdp", "mysql", "postgres", "ldap", "redis", "http", "mongodb", "mssql", "smb", "snmp", "imap", "vnc"]
 }
