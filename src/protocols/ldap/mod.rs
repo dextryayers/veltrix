@@ -1,3 +1,5 @@
+pub mod ber;
+
 use async_trait::async_trait;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -12,76 +14,21 @@ use super::Protocol;
 
 pub struct LdapProtocol;
 
-fn ber_len(len: usize) -> Vec<u8> {
-    if len < 128 {
-        vec![len as u8]
-    } else if len < 256 {
-        vec![0x81, len as u8]
-    } else if len < 65536 {
-        vec![0x82, (len >> 8) as u8, (len & 0xff) as u8]
-    } else {
-        vec![0x83, (len >> 16) as u8, (len >> 8) as u8, (len & 0xff) as u8]
-    }
-}
-
-fn ber_integer(value: i32) -> Vec<u8> {
-    let bytes = if value < 0x80 {
-        vec![value as u8]
-    } else if value < 0x8000 {
-        vec![(value >> 8) as u8, value as u8]
-    } else {
-        vec![(value >> 24) as u8, (value >> 16) as u8, (value >> 8) as u8, value as u8]
-    };
-    let mut result = vec![0x02u8];
-    result.extend_from_slice(&ber_len(bytes.len()));
-    result.extend_from_slice(&bytes);
-    result
-}
-
-fn ber_octet_string(data: &[u8]) -> Vec<u8> {
-    let mut result = vec![0x04u8];
-    result.extend_from_slice(&ber_len(data.len()));
-    result.extend_from_slice(data);
-    result
-}
-
-fn ber_context_tag(tag: u8, data: &[u8]) -> Vec<u8> {
-    let mut result = vec![0x80 | tag];
-    result.extend_from_slice(&ber_len(data.len()));
-    result.extend_from_slice(data);
-    result
-}
-
-fn ber_sequence(items: &[u8]) -> Vec<u8> {
-    let mut result = vec![0x30u8];
-    result.extend_from_slice(&ber_len(items.len()));
-    result.extend_from_slice(items);
-    result
-}
-
-fn ber_application(tag: u8, data: &[u8]) -> Vec<u8> {
-    let mut result = vec![0x60 | tag];
-    result.extend_from_slice(&ber_len(data.len()));
-    result.extend_from_slice(data);
-    result
-}
-
-
 fn build_bind_request(dn: &str, password: &str) -> Vec<u8> {
-    let auth = ber_context_tag(0, password.as_bytes());
+    let auth = ber::ber_context_tag(0, password.as_bytes());
     let bind_content = {
-        let mut b = ber_integer(3);
-        b.extend_from_slice(&ber_octet_string(dn.as_bytes()));
+        let mut b = ber::ber_integer(3);
+        b.extend_from_slice(&ber::ber_octet_string(dn.as_bytes()));
         b.extend_from_slice(&auth);
         b
     };
-    let bind_request = ber_application(0, &bind_content);
+    let bind_request = ber::ber_application(0, &bind_content);
     let message = {
-        let mut m = ber_integer(1);
+        let mut m = ber::ber_integer(1);
         m.extend_from_slice(&bind_request);
         m
     };
-    ber_sequence(&message)
+    ber::ber_sequence(&message)
 }
 
 async fn read_ldap_response(stream: &mut TcpStream) -> Result<i32, String> {

@@ -1,3 +1,5 @@
+pub mod packet;
+
 use async_trait::async_trait;
 use sha1::{Sha1, digest::Digest as Sha1Digest};
 use sha2::{Sha256, digest::Digest as Sha256Digest};
@@ -13,19 +15,6 @@ use crate::proxy::ProxyConfig;
 use super::Protocol;
 
 pub struct MySqlProtocol;
-
-async fn read_packet(stream: &mut TcpStream) -> Result<Vec<u8>, String> {
-    let mut header = [0u8; 4];
-    stream.read_exact(&mut header).await
-        .map_err(|e| format!("Read header: {}", e))?;
-    let len = (header[0] as usize) | ((header[1] as usize) << 8) | ((header[2] as usize) << 16);
-    let mut payload = vec![0u8; len];
-    if len > 0 {
-        stream.read_exact(&mut payload).await
-            .map_err(|e| format!("Read payload: {}", e))?;
-    }
-    Ok(payload)
-}
 
 fn mysql_native_password(password: &str, salt: &[u8]) -> Vec<u8> {
     let mut stage1 = Sha1::new();
@@ -93,7 +82,7 @@ impl Protocol for MySqlProtocol {
                     .map_err(|e| format!("Connect: {}", e))?,
             };
 
-            let payload = read_packet(&mut stream).await?;
+            let payload = packet::read_packet(&mut stream).await?;
 
             if payload[0] == 0xff {
                 let err_msg = String::from_utf8_lossy(&payload[3..]);

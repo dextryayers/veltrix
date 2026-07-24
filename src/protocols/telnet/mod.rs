@@ -1,3 +1,5 @@
+pub mod negotiation;
+
 use async_trait::async_trait;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -11,12 +13,6 @@ use crate::proxy::ProxyConfig;
 use super::Protocol;
 
 pub struct TelnetProtocol;
-
-const TELNET_IAC: u8 = 255;
-const TELNET_DONT: u8 = 254;
-const TELNET_DO: u8 = 253;
-const TELNET_WONT: u8 = 252;
-const TELNET_WILL: u8 = 251;
 
 #[async_trait]
 impl Protocol for TelnetProtocol {
@@ -48,7 +44,7 @@ impl Protocol for TelnetProtocol {
             let mut buf = Vec::new();
 
             buf_reader.read_until(b'\n', &mut buf).await.ok();
-            let neg = handle_telnet_negotiation(&buf);
+            let neg = negotiation::handle_telnet_negotiation(&buf);
             if !neg.is_empty() {
                 writer.write_all(&neg).await.ok();
             }
@@ -108,27 +104,4 @@ impl Protocol for TelnetProtocol {
             ),
         }
     }
-}
-
-fn handle_telnet_negotiation(buf: &[u8]) -> Vec<u8> {
-    let mut response = Vec::new();
-    let mut i = 0;
-    while i < buf.len() {
-        if buf[i] == TELNET_IAC && i + 2 < buf.len() {
-            match buf[i + 1] {
-                TELNET_DO => {
-                    response.extend_from_slice(&[TELNET_IAC, TELNET_WONT, buf[i + 2]]);
-                }
-                TELNET_WILL => {
-                    response.extend_from_slice(&[TELNET_IAC, TELNET_DONT, buf[i + 2]]);
-                }
-                TELNET_DONT | TELNET_WONT => {}
-                _ => {}
-            }
-            i += 3;
-        } else {
-            i += 1;
-        }
-    }
-    response
 }
