@@ -71,5 +71,6 @@ socket2 = "0.6"
 aes-gcm = "0.10"
 argon2 = "0.5"
 hex = "0.4"
+fastrand = "2.0"
 
 [dev-dependencies]

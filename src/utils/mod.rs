@@ -1,4 +1,5 @@
 pub mod encrypt;
+pub mod ml_predict;
 pub mod output;
 pub mod patterns;
 pub mod ratelimit;

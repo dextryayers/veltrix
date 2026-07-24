@@ -17,7 +17,10 @@ pub fn ntlmv2_hash(password: &str, username: &str, domain: &str) -> Vec<u8> {
     let mut ident = to_utf16_le(&upper);
     ident.extend_from_slice(&to_utf16_le(domain));
 
-    let mut mac = Hmac::<Sha256>::new_from_slice(&hash).unwrap();
+    let mut mac = match Hmac::<Sha256>::new_from_slice(&hash) {
+        Ok(m) => m,
+        Err(_) => return Vec::new(),
+    };
     mac.update(&ident);
     mac.finalize().into_bytes().to_vec()
 }
@@ -100,7 +103,10 @@ pub fn build_ntlmv2_auth(
     proof_input.extend_from_slice(server_challenge);
     proof_input.extend_from_slice(&blob);
 
-    let mut mac = Hmac::<Sha256>::new_from_slice(&ntlmv2_hash_val).unwrap();
+    let mut mac = match Hmac::<Sha256>::new_from_slice(&ntlmv2_hash_val) {
+        Ok(m) => m,
+        Err(_) => return Vec::new(),
+    };
     mac.update(&proof_input);
     let nt_proof = mac.finalize().into_bytes();
 

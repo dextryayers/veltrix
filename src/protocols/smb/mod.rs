@@ -29,7 +29,10 @@ fn ntlmv2_hash(password: &str, username: &str, domain: &str) -> Vec<u8> {
     let upper = username.to_uppercase();
     let mut ident = to_utf16_le(&upper);
     ident.extend_from_slice(&to_utf16_le(domain));
-    let mut mac = Hmac::<Sha256>::new_from_slice(&hash).unwrap();
+    let mut mac = match Hmac::<Sha256>::new_from_slice(&hash) {
+        Ok(m) => m,
+        Err(_) => return Vec::new(),
+    };
     mac.update(&ident);
     mac.finalize().into_bytes().to_vec()
 }
@@ -102,13 +105,22 @@ fn parse_challenge(data: &[u8]) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), String> {
     if data.len() < 48 || &data[..8] != b"NTLMSSP\x00" {
         return Err("Not NTLMSSP".to_string());
     }
-    let msg_type = u32::from_le_bytes(data[8..12].try_into().unwrap());
+    let msg_type = {
+        let arr: [u8; 4] = data[8..12].try_into().map_err(|_| "Bad msg_type".to_string())?;
+        u32::from_le_bytes(arr)
+    };
     if msg_type != 2 {
         return Err(format!("Not challenge (type {} )", msg_type));
     }
     let server_challenge = data[24..32].to_vec();
-    let target_name_len = u16::from_le_bytes(data[12..14].try_into().unwrap()) as usize;
-    let target_name_off = u32::from_le_bytes(data[16..20].try_into().unwrap()) as usize;
+    let target_name_len = {
+        let arr: [u8; 2] = data[12..14].try_into().map_err(|_| "Bad tname_len".to_string())?;
+        u16::from_le_bytes(arr) as usize
+    };
+    let target_name_off = {
+        let arr: [u8; 4] = data[16..20].try_into().map_err(|_| "Bad tname_off".to_string())?;
+        u32::from_le_bytes(arr) as usize
+    };
     let mut target_name = Vec::new();
     if target_name_len > 0 && target_name_off + target_name_len <= data.len() {
         target_name = data[target_name_off..target_name_off + target_name_len].to_vec();
@@ -152,7 +164,10 @@ fn build_ntlmv2_auth(
 
     use hmac::{Hmac, Mac, KeyInit};
     use sha2::Sha256;
-    let mut mac = Hmac::<Sha256>::new_from_slice(&ntlmv2_hash_val).unwrap();
+    let mut mac = match Hmac::<Sha256>::new_from_slice(&ntlmv2_hash_val) {
+        Ok(m) => m,
+        Err(_) => return Vec::new(),
+    };
     mac.update(&proof_input);
     let nt_proof = mac.finalize().into_bytes();
 
@@ -247,6 +262,20 @@ fn split_username(input: &str) -> (String, String) {
     }
 }
 
+fn read_u32_le(slice: &[u8], start: usize) -> Result<u32, String> {
+    let arr: [u8; 4] = slice.get(start..start+4)
+        .ok_or_else(|| format!("Bad u32 offset {}", start))?
+        .try_into().map_err(|_| format!("Invalid u32 slice {}", start))?;
+    Ok(u32::from_le_bytes(arr))
+}
+
+fn read_u16_le(slice: &[u8], start: usize) -> u16 {
+    slice.get(start..start+2)
+        .and_then(|s| <[u8; 2]>::try_from(s).ok())
+        .map(u16::from_le_bytes)
+        .unwrap_or(0)
+}
+
 async fn read_smb2_response(stream: &mut TcpStream) -> Result<(u32, Vec<u8>), String> {
     let mut hdr = [0u8; 64];
     stream.read_exact(&mut hdr).await
@@ -256,34 +285,24 @@ async fn read_smb2_response(stream: &mut TcpStream) -> Result<(u32, Vec<u8>), St
         return Err("Invalid SMB protocol ID".to_string());
     }
 
-    let status = u32::from_le_bytes(hdr[8..12].try_into().unwrap());
+    let status = read_u32_le(&hdr, 8)?;
     let data_offset = 64usize;
 
     let mut data = Vec::new();
     data.extend_from_slice(&hdr);
 
-    let struct_size = u16::from_le_bytes(hdr[68..70].try_into().unwrap_or([0, 0]));
+    let struct_size = read_u16_le(&hdr, 68);
     let sec_buf_off: u16;
     let sec_buf_len: u16;
 
     match struct_size {
         65 => {
-            if data.len() >= 76 {
-                sec_buf_off = u16::from_le_bytes(hdr[72..74].try_into().unwrap());
-                sec_buf_len = u16::from_le_bytes(hdr[74..76].try_into().unwrap());
-            } else {
-                sec_buf_off = 0;
-                sec_buf_len = 0;
-            }
+            sec_buf_off = read_u16_le(&hdr, 72);
+            sec_buf_len = read_u16_le(&hdr, 74);
         }
         9 => {
-            if data.len() >= 74 {
-                sec_buf_off = u16::from_le_bytes(hdr[70..72].try_into().unwrap());
-                sec_buf_len = u16::from_le_bytes(hdr[72..74].try_into().unwrap());
-            } else {
-                sec_buf_off = 0;
-                sec_buf_len = 0;
-            }
+            sec_buf_off = read_u16_le(&hdr, 70);
+            sec_buf_len = read_u16_le(&hdr, 72);
         }
         _ => {
             sec_buf_off = 0;

@@ -92,16 +92,24 @@ async fn read_op_reply(stream: &mut TcpStream, timeout_dur: Duration) -> Result<
         return Err("Response too short".to_string());
     }
 
-    let op_code = i32::from_le_bytes(full[12..16].try_into().unwrap());
+    let read_i32 = |start: usize| -> Result<i32, String> {
+        if start + 4 > full.len() {
+            return Err(format!("Response too short at offset {}", start));
+        }
+        let arr: [u8; 4] = full[start..start+4].try_into()
+            .map_err(|_| format!("Invalid slice at offset {}", start))?;
+        Ok(i32::from_le_bytes(arr))
+    };
+
+    let op_code = read_i32(12)?;
     if op_code != 1 {
         return Err(format!("Unexpected opCode: {}", op_code));
     }
 
-    let resp_flags = i32::from_le_bytes(full[16..20].try_into().unwrap());
+    let resp_flags = read_i32(16)?;
     if resp_flags & 0x01 != 0 {
         let doc_start = 36;
-        if doc_start + 4 <= full.len() {
-            let dlen = i32::from_le_bytes(full[doc_start..doc_start+4].try_into().unwrap()) as usize;
+        if let Ok(dlen) = read_i32(doc_start).map(|v| v as usize) {
             if doc_start + dlen <= full.len() {
                 let doc = full[doc_start..doc_start+dlen].to_vec();
                 let errmsg = bson_find_string(&doc, "errmsg").unwrap_or_else(|| "QueryFailure".to_string());
@@ -112,16 +120,13 @@ async fn read_op_reply(stream: &mut TcpStream, timeout_dur: Duration) -> Result<
         return Err("QueryFailure".to_string());
     }
 
-    let num_returned = i32::from_le_bytes(full[32..36].try_into().unwrap());
+    let num_returned = read_i32(32)?;
     if num_returned == 0 {
         return Err("No documents returned".to_string());
     }
 
     let doc_start = 36;
-    if doc_start + 4 > full.len() {
-        return Err("Response too short for document".to_string());
-    }
-    let dlen = i32::from_le_bytes(full[doc_start..doc_start+4].try_into().unwrap()) as usize;
+    let dlen = read_i32(doc_start)? as usize;
     if doc_start + dlen > full.len() {
         return Err("Document exceeds response".to_string());
     }

@@ -51,13 +51,20 @@ impl Protocol for SshProtocol {
             let result: Result<AuthResult, String> = tokio::task::spawn_blocking(move || {
                 std_stream.set_read_timeout(Some(timeout_c)).ok();
                 std_stream.set_write_timeout(Some(timeout_c)).ok();
-                let mut session = Session::new().unwrap();
+                let mut session = match Session::new() {
+                    Ok(s) => s,
+                    Err(e) => return Ok(AuthResult::new(
+                        target_c.host.clone(), target_c.port, "ssh",
+                        username, password,
+                        false, start.elapsed(), Some(format!("Session init: {}", e)),
+                    )),
+                };
                 session.set_tcp_stream(std_stream);
-                if session.handshake().is_err() {
+                if let Err(e) = session.handshake() {
                     return Ok(AuthResult::new(
                         target_c.host.clone(), target_c.port, "ssh",
                         username, password,
-                        false, start.elapsed(), Some("SSH handshake failed".into()),
+                        false, start.elapsed(), Some(format!("SSH handshake: {}", e)),
                     ));
                 }
                 match session.userauth_password(&username, &password) {

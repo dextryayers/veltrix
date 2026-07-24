@@ -204,6 +204,25 @@ pub struct CliArgs {
     #[arg(long = "wl-output", help = "Write wordlist to file (default: stdout)", value_name = "FILE")]
     pub wl_output: Option<PathBuf>,
 
+    // ── ML Password Prediction Options ──
+    #[arg(long = "ml-train", help = "Train Markov model on a wordlist file", value_name = "FILE")]
+    pub ml_train: Option<PathBuf>,
+
+    #[arg(long = "ml-generate", help = "Generate N passwords from trained model (use after --ml-train)", value_name = "N")]
+    pub ml_generate: Option<usize>,
+
+    #[arg(long = "ml-order", help = "Markov chain order (default: 3)", default_value = "3", value_name = "N")]
+    pub ml_order: usize,
+
+    #[arg(long = "ml-max-len", help = "Max generated password length (default: 24)", default_value = "24", value_name = "N")]
+    pub ml_max_len: usize,
+
+    #[arg(long = "ml-score", help = "Score password(s) from a file (one per line) against the trained model", value_name = "FILE")]
+    pub ml_score: Option<PathBuf>,
+
+    #[arg(long = "ml-output", help = "Output file for generated passwords", value_name = "FILE")]
+    pub ml_output: Option<PathBuf>,
+
     // ── Behavior Options ──
     #[arg(long = "stop-on-first", help = "Stop after first success per target")]
     pub stop_on_first: bool,

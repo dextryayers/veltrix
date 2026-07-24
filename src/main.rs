@@ -24,6 +24,85 @@ async fn main() {
         return;
     }
 
+    // Handle wordlist generation mode
+    if args.gen_wordlist {
+        let cfg = args.to_wordlist_config();
+        let words = crate::utils::wordlist_gen::generate_wordlist(&cfg);
+        match args.wl_output {
+            Some(path) => {
+                let content = words.iter().cloned().collect::<Vec<_>>().join("\n");
+                std::fs::write(&path, &content).unwrap_or_else(|e| {
+                    eprintln!("Failed to write wordlist: {}", e);
+                    std::process::exit(1);
+                });
+                log::info!("Generated {} candidates -> {}", words.len(), path.display());
+            }
+            None => {
+                for w in &words {
+                    println!("{}", w);
+                }
+                eprintln!("[+] Generated {} candidates", words.len());
+            }
+        }
+        return;
+    }
+
+    // Handle ML prediction mode
+    let ml_train_path = args.ml_train.clone();
+    let ml_generate_count = args.ml_generate;
+    let ml_score_path = args.ml_score.clone();
+    let ml_order = args.ml_order;
+    let ml_max_len = args.ml_max_len;
+    let ml_output_path = args.ml_output.clone();
+
+    if let Some(ref train_path) = ml_train_path {
+        let data = std::fs::read_to_string(train_path).unwrap_or_else(|e| {
+            eprintln!("Failed to read training file: {}", e);
+            std::process::exit(1);
+        });
+        let passwords: Vec<String> = data.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
+        let mut mc = crate::utils::ml_predict::MarkovChain::new(ml_order);
+        mc.train(&passwords);
+        log::info!("Trained Markov model (order={}) on {} passwords", ml_order, passwords.len());
+
+        if let Some(count) = ml_generate_count {
+            let generated = mc.generate_many(count, ml_max_len);
+            match ml_output_path {
+                Some(ref path) => {
+                    std::fs::write(path, generated.join("\n")).unwrap_or_else(|e| {
+                        eprintln!("Failed to write ML output: {}", e);
+                        std::process::exit(1);
+                    });
+                    log::info!("Generated {} passwords -> {}", generated.len(), path.display());
+                }
+                None => {
+                    for w in &generated {
+                        println!("{}", w);
+                    }
+                    eprintln!("[+] ML generated {} passwords", generated.len());
+                }
+            }
+        }
+
+        if let Some(ref score_path) = ml_score_path {
+            let data = std::fs::read_to_string(score_path).unwrap_or_else(|e| {
+                eprintln!("Failed to read score file: {}", e);
+                std::process::exit(1);
+            });
+            for line in data.lines() {
+                let line = line.trim();
+                if !line.is_empty() {
+                    let score = mc.complexity_score(line);
+                    println!("{}: {:.4}", line, score);
+                }
+            }
+        }
+
+        if ml_generate_count.is_some() || ml_score_path.is_some() {
+            return;
+        }
+    }
+
     if args.should_show_banner() {
         print_banner();
     }

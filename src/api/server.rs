@@ -6,6 +6,7 @@ use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use crate::api::cloud::CloudScheduler;
 use crate::core::result::AuthResult;
 use crate::protocols::get_protocol;
 
@@ -28,6 +29,7 @@ pub struct ApiServer {
     bind: String,
     jobs: Arc<Mutex<HashMap<String, AttackJob>>>,
     running: Arc<std::sync::atomic::AtomicBool>,
+    cloud: CloudScheduler,
 }
 
 impl ApiServer {
@@ -39,6 +41,7 @@ impl ApiServer {
             bind,
             jobs: Arc::new(Mutex::new(HashMap::new())),
             running,
+            cloud: CloudScheduler::new(),
         }
     }
 
@@ -54,6 +57,7 @@ impl ApiServer {
 
         let jobs = Arc::clone(&self.jobs);
         let running = Arc::clone(&self.running);
+        let cloud = self.cloud.clone();
 
         loop {
             tokio::select! {
@@ -67,9 +71,10 @@ impl ApiServer {
                     };
                     let jobs = Arc::clone(&jobs);
                     let running = Arc::clone(&running);
+                    let cloud = cloud.clone();
 
                     tokio::spawn(async move {
-                        if let Err(e) = handle_client(stream, addr, jobs, running).await {
+                        if let Err(e) = handle_client(stream, addr, jobs, running, cloud).await {
                             log::debug!("API client {} error: {}", addr, e);
                         }
                     });
@@ -89,6 +94,7 @@ async fn handle_client(
     _addr: std::net::SocketAddr,
     jobs: Arc<Mutex<HashMap<String, AttackJob>>>,
     _running: Arc<std::sync::atomic::AtomicBool>,
+    cloud: CloudScheduler,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (reader, mut writer) = tokio::io::split(stream);
     let mut reader = BufReader::new(reader);
@@ -330,6 +336,101 @@ async fn handle_client(
             send_json(&mut writer, 200, &serde_json::json!({
                 "status": "stopped",
                 "message": "Stop endpoint ready. Full graceful shutdown requires SIGINT."
+            })).await?;
+        }
+        // ── Cloud API endpoints ──
+        ("GET", "/api/v1/cloud/jobs") => {
+            let jobs = cloud.list_jobs();
+            send_json(&mut writer, 200, &serde_json::json!({ "jobs": jobs })).await?;
+        }
+        ("GET", path) if path.starts_with("/api/v1/cloud/jobs/") => {
+            let job_id = path.trim_start_matches("/api/v1/cloud/jobs/");
+            match cloud.get_job(job_id) {
+                Some(job) => send_json(&mut writer, 200, &serde_json::to_value(&job).unwrap_or_default()).await?,
+                None => send_json(&mut writer, 404, &serde_json::json!({"error": "Job not found"})).await?,
+            }
+        }
+        ("POST", "/api/v1/cloud/submit") => {
+            let parsed: serde_json::Value = match serde_json::from_str(&body) {
+                Ok(v) => v,
+                Err(e) => {
+                    send_json(&mut writer, 400, &serde_json::json!({"error": format!("Invalid JSON: {}", e)})).await?;
+                    return Ok(());
+                }
+            };
+
+            let target = parsed["target"].as_str().unwrap_or("").to_string();
+            let protocol = parsed["protocol"].as_str().unwrap_or("").to_string();
+            let usernames: Vec<String> = parsed["usernames"].as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                .unwrap_or_default();
+            let passwords: Vec<String> = parsed["passwords"].as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                .unwrap_or_default();
+
+            if target.is_empty() || protocol.is_empty() {
+                send_json(&mut writer, 400, &serde_json::json!({"error": "target and protocol are required"})).await?;
+                return Ok(());
+            }
+            if usernames.is_empty() || passwords.is_empty() {
+                send_json(&mut writer, 400, &serde_json::json!({"error": "usernames and passwords required"})).await?;
+                return Ok(());
+            }
+
+            let config = crate::core::config::AttackConfig {
+                targets: vec![target],
+                target_file: None,
+                users: usernames,
+                passwords,
+                user_file: None,
+                password_file: None,
+                combo_file: None,
+                protocols: vec![protocol],
+                ports: vec![],
+                threads: 5,
+                timeout: std::time::Duration::from_secs(10),
+                delay: std::time::Duration::ZERO,
+                rate_limit: None,
+                proxy: None,
+                proxy_file: None,
+                proxy_chain: None,
+                output_file: None,
+                output_format: crate::core::config::OutputFormat::Plain,
+                resume_file: None,
+                config_file: None,
+                checkpoint_interval: 100,
+                rdp_domain: None,
+                http_userfield: None,
+                http_passfield: None,
+                http_success: None,
+                verbose: false,
+                quiet: false,
+                no_banner: true,
+                single_user_mode: false,
+                spray_mode: false,
+                stop_on_first: false,
+                retries: 1,
+                rule_file: None,
+                max_mutations: 500,
+                max_password_len: None,
+                distributed: None,
+                distributed_token: None,
+                distributed_name: None,
+                plugins: vec![],
+                api_bind: None,
+                encrypt: false,
+                encrypt_passphrase: None,
+                decrypt_file: None,
+                decrypt_output: None,
+            };
+
+            let job_id = cloud.submit(config, _running);
+            send_json(&mut writer, 200, &serde_json::json!({
+                "job_id": job_id,
+                "status": "submitted",
+                "endpoints": {
+                    "status": format!("/api/v1/cloud/jobs/{}", job_id),
+                }
             })).await?;
         }
         _ => {

@@ -1,0 +1,52 @@
+{
+  "name": "veltrix",
+  "displayName": "Veltrix - Brute Force Toolkit",
+  "description": "Run multi-protocol brute force attacks from VSCode",
+  "version": "1.0.0",
+  "publisher": "aniippxploit",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other"],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "veltrix.runAttack",
+        "title": "Veltrix: Run Attack"
+      },
+      {
+        "command": "veltrix.openResults",
+        "title": "Veltrix: Open Results"
+      },
+      {
+        "command": "veltrix.stopAttack",
+        "title": "Veltrix: Stop Attack"
+      }
+    ],
+    "configuration": {
+      "title": "Veltrix",
+      "properties": {
+        "veltrix.binaryPath": {
+          "type": "string",
+          "default": "veltrix",
+          "description": "Path to the veltrix binary"
+        },
+        "veltrix.apiEndpoint": {
+          "type": "string",
+          "default": "http://127.0.0.1:8080",
+          "description": "Veltrix API endpoint"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  }
+}

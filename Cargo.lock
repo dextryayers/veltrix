@@ -3723,6 +3723,7 @@ dependencies = [
  "csv",
  "ctrlc",
  "env_logger",
+ "fastrand",
  "futures",
  "hex",
  "hmac",
