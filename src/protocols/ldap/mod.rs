@@ -1,10 +1,12 @@
 pub mod ber;
 
 use async_trait::async_trait;
+use native_tls::TlsConnector as NativeTlsConnector;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
+use tokio_native_tls::TlsConnector;
 
 use crate::core::credential::Credential;
 use crate::core::result::AuthResult;
@@ -110,16 +112,41 @@ impl Protocol for LdapProtocol {
         proxy: &Option<ProxyConfig>,
     ) -> AuthResult {
         let start = Instant::now();
+        let use_tls = target.port == 636;
 
         match timeout(timeout_dur, async {
             let addr = target.addr_string();
-            let mut stream = match proxy {
+            let stream = match proxy {
                 Some(p) => p.tcp_connect(&addr, timeout_dur).await
                     .map_err(|e| format!("Proxy connect: {}", e))?,
                 None => TcpStream::connect(&addr).await
                     .map_err(|e| format!("Connect: {}", e))?,
             };
 
+            if use_tls {
+                let connector = TlsConnector::from(
+                    NativeTlsConnector::builder().build()
+                        .map_err(|e| format!("TLS build: {}", e))?
+                );
+                let mut tls_stream = connector.connect(&target.host, stream).await
+                    .map_err(|e| format!("TLS connect: {}", e))?;
+
+                let dn = credential.username.clone();
+                let bind_req = build_bind_request(&dn, &credential.password);
+
+                tls_stream.write_all(&bind_req).await
+                    .map_err(|e| format!("Send bind: {}", e))?;
+                tls_stream.flush().await.ok();
+
+                let mut buf = vec![0u8; 8192];
+                let n = tls_stream.read(&mut buf).await
+                    .map_err(|e| format!("Read resp: {}", e))?;
+                let result_code = parse_ldap_result_code(&buf[..n]);
+
+                return Ok(ldap_result(target, credential, start, result_code));
+            }
+
+            let mut stream = stream;
             let dn = credential.username.clone();
             let bind_req = build_bind_request(&dn, &credential.password);
 
@@ -129,31 +156,7 @@ impl Protocol for LdapProtocol {
 
             let result_code = read_ldap_response(&mut stream).await?;
 
-            if result_code == 0 {
-                Ok(AuthResult::new(
-                    target.host.clone(), target.port, "ldap",
-                    credential.username.clone(), credential.password.clone(),
-                    true, start.elapsed(), None,
-                ))
-            } else {
-                let err_msg = match result_code {
-                    1 => "OperationsError",
-                    2 => "ProtocolError",
-                    3 => "TimeLimitExceeded",
-                    4 => "SizeLimitExceeded",
-                    7 => "AuthMethodNotSupported",
-                    8 => "StrongerAuthRequired",
-                    14 => "SaslBindInProgress",
-                    49 => "InvalidCredentials",
-                    _ => "Unknown",
-                };
-                Ok(AuthResult::new(
-                    target.host.clone(), target.port, "ldap",
-                    credential.username.clone(), credential.password.clone(),
-                    false, start.elapsed(),
-                    if result_code == 49 { None } else { Some(err_msg.to_string()) },
-                ))
-            }
+            Ok(ldap_result(target, credential, start, result_code))
         }).await {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => AuthResult::new(
@@ -167,5 +170,51 @@ impl Protocol for LdapProtocol {
                 false, start.elapsed(), Some("Timeout".into()),
             ),
         }
+    }
+}
+
+fn ldap_result(target: &Target, credential: &Credential, start: Instant, result_code: i32) -> AuthResult {
+    if result_code == 0 {
+        AuthResult::new(target.host.clone(), target.port, "ldap",
+            credential.username.clone(), credential.password.clone(),
+            true, start.elapsed(), None)
+    } else {
+        let err_msg = match result_code {
+            1 => "OperationsError",
+            2 => "ProtocolError",
+            3 => "TimeLimitExceeded",
+            4 => "SizeLimitExceeded",
+            7 => "AuthMethodNotSupported",
+            8 => "StrongerAuthRequired",
+            14 => "SaslBindInProgress",
+            49 => "InvalidCredentials",
+            _ => "Unknown",
+        };
+        AuthResult::new(target.host.clone(), target.port, "ldap",
+            credential.username.clone(), credential.password.clone(),
+            false, start.elapsed(),
+            if result_code == 49 { None } else { Some(err_msg.to_string()) })
+    }
+}
+
+fn parse_ldap_result_code(data: &[u8]) -> i32 {
+    if data.len() < 2 || data[0] != 0x30 {
+        return -1;
+    }
+    let len = if data[1] < 0x81 { data[1] as usize } else { 0 };
+    let pos = 2 + len + 2;
+    if pos >= data.len() || data[pos] != 0x0a {
+        return -1;
+    }
+    let v = data[pos + 1] as i32;
+    if v == 1 {
+        data.get(pos + 2).map(|&b| b as i32).unwrap_or(-1)
+    } else {
+        let mut val = 0i32;
+        for i in 0..v as usize {
+            if pos + 2 + i >= data.len() { break; }
+            val = (val << 8) | data[pos + 2 + i] as i32;
+        }
+        val
     }
 }

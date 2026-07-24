@@ -74,37 +74,80 @@ async fn imap_auth_plain(
     start: Instant,
     stream: TcpStream,
 ) -> Result<AuthResult, String> {
+    let mut buf = vec![0u8; 4096];
+
+    stream.readable().await.ok();
+    let _n = stream.try_read(&mut buf).ok();
+
+    stream.writable().await.ok();
+    stream.try_write(b"a001 CAPABILITY\r\n").ok();
+    stream.readable().await.ok();
+    let _n = stream.try_read(&mut buf).ok();
+
+    let caps = String::from_utf8_lossy(&buf);
+
+    if caps.to_uppercase().contains("STARTTLS") {
+        stream.writable().await.ok();
+        stream.try_write(b"a002 STARTTLS\r\n").ok();
+        buf.clear();
+        stream.readable().await.ok();
+        let n = stream.try_read(&mut buf).unwrap_or(0);
+        let stls_resp = String::from_utf8_lossy(&buf[..n]);
+        if stls_resp.starts_with("a002 OK") {
+            let connector = TlsConnector::from(
+                NativeTlsConnector::builder().build()
+                    .map_err(|e| format!("TLS build: {}", e))?
+            );
+            match connector.connect(host, stream).await {
+                Ok(mut tls_stream) => {
+                    let mut tb = vec![0u8; 4096];
+                    tls_stream.read(&mut tb).await.ok();
+                    let cmd = format!("a003 LOGIN {} {}\r\n", username, password);
+                    tls_stream.write_all(cmd.as_bytes()).await.map_err(|e| format!("LOGIN cmd: {}", e))?;
+                    tls_stream.flush().await.ok();
+                    let mut tresp = String::new();
+                    loop {
+                        let n = tls_stream.read(&mut tb).await.map_err(|e| format!("Read resp: {}", e))?;
+                        if n == 0 { break; }
+                        tresp.push_str(&String::from_utf8_lossy(&tb[..n]));
+                        if tresp.contains("a003 ") { break; }
+                    }
+                    let success = tresp.to_lowercase().contains("a003 ok");
+                    return Ok(AuthResult::new(host.to_string(), port, "imap",
+                        username.to_string(), password.to_string(),
+                        success, start.elapsed(),
+                        if success { None } else { Some("Auth denied".into()) }));
+                }
+                Err(e) => {
+                    return Ok(AuthResult::new(host.to_string(), port, "imap",
+                        username.to_string(), password.to_string(),
+                        false, start.elapsed(), Some(format!("STARTTLS failed: {}", e))));
+                }
+            }
+        }
+    }
+
     let (reader, mut writer) = stream.into_split();
     let mut buf_reader = BufReader::new(reader);
-    let mut buf = Vec::new();
-
-    buf_reader.read_until(b'\n', &mut buf).await
-        .map_err(|e| format!("Read greeting: {}", e))?;
-
-    let cmd = format!("a001 LOGIN {} {}\r\n", username, password);
+    let cmd = format!("a003 LOGIN {} {}\r\n", username, password);
     writer.write_all(cmd.as_bytes()).await
         .map_err(|e| format!("LOGIN cmd: {}", e))?;
     writer.flush().await.ok();
 
-    buf.clear();
     let mut resp = String::new();
     loop {
-        buf.clear();
-        let n = buf_reader.read_until(b'\n', &mut buf).await
+        let mut line = Vec::new();
+        let n = buf_reader.read_until(b'\n', &mut line).await
             .map_err(|e| format!("Read resp: {}", e))?;
-        if n == 0 {
-            break;
-        }
-        resp.push_str(&String::from_utf8_lossy(&buf));
-        if resp.contains("a001 ") {
-            break;
-        }
+        if n == 0 { break; }
+        resp.push_str(&String::from_utf8_lossy(&line));
+        if resp.contains("a003 ") { break; }
     }
 
-    let _ = writer.write_all(b"a002 LOGOUT\r\n").await;
+    let _ = writer.write_all(b"a004 LOGOUT\r\n").await;
 
     let resp_lower = resp.to_lowercase();
-    let success = resp_lower.contains("a001 ok");
+    let success = resp_lower.contains("a003 ok");
 
     Ok(AuthResult::new(
         host.to_string(), port, "imap",
