@@ -1,4 +1,7 @@
 use std::fmt;
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 
 #[derive(Debug, Clone)]
 pub enum ProxyConfig {
@@ -181,6 +184,217 @@ fn parse_auth(auth: Option<&str>) -> (Option<String>, Option<String>) {
     } else {
         (None, None)
     }
+}
+
+impl ProxyConfig {
+    pub async fn tcp_connect(&self, addr: &str, timeout: Duration) -> Result<TcpStream, String> {
+        match self {
+            ProxyConfig::None => {
+                tokio::time::timeout(timeout, TcpStream::connect(addr)).await
+                    .map_err(|_| format!("Timeout connecting to {}", addr))?
+                    .map_err(|e| format!("Failed to connect to {}: {}", addr, e))
+            }
+            ProxyConfig::Http { host, port, username, password, .. } => {
+                let proxy_addr = format!("{}:{}", host, port);
+                let mut stream = tokio::time::timeout(timeout, TcpStream::connect(&proxy_addr)).await
+                    .map_err(|_| format!("Timeout connecting to proxy {}", proxy_addr))?
+                    .map_err(|e| format!("Failed to connect to proxy {}: {}", proxy_addr, e))?;
+
+                let auth_header = if let (Some(u), Some(p)) = (username, password) {
+                    let credentials = base64_encode(&format!("{}:{}", u, p));
+                    format!("Proxy-Authorization: Basic {}\r\n", credentials)
+                } else {
+                    String::new()
+                };
+
+                let connect_req = format!(
+                    "CONNECT {} HTTP/1.1\r\nHost: {}\r\n{}\r\n",
+                    addr, addr, auth_header
+                );
+                stream.write_all(connect_req.as_bytes()).await
+                    .map_err(|e| format!("Failed to send CONNECT: {}", e))?;
+                stream.flush().await.ok();
+
+                let mut buf = vec![0u8; 4096];
+                let n = stream.read(&mut buf).await
+                    .map_err(|e| format!("Failed to read CONNECT response: {}", e))?;
+                let resp = String::from_utf8_lossy(&buf[..n]);
+
+                if !resp.starts_with("HTTP/1.1 200") && !resp.starts_with("HTTP/1.0 200") {
+                    return Err(format!("Proxy CONNECT failed: {}", resp.lines().next().unwrap_or("unknown")));
+                }
+
+                Ok(stream)
+            }
+            ProxyConfig::Socks5 { host, port, username, password } => {
+                let proxy_addr = format!("{}:{}", host, port);
+                let mut stream = tokio::time::timeout(timeout, TcpStream::connect(&proxy_addr)).await
+                    .map_err(|_| format!("Timeout connecting to SOCKS5 proxy {}", proxy_addr))?
+                    .map_err(|e| format!("Failed to connect to SOCKS5 proxy {}: {}", proxy_addr, e))?;
+
+                // SOCKS5 greeting: no auth or username/password
+                let auth_method = if username.is_some() { 0x02 } else { 0x00 };
+                stream.write_all(&[0x05, 0x01, auth_method]).await
+                    .map_err(|e| format!("SOCKS5 greeting send: {}", e))?;
+                stream.flush().await.ok();
+
+                let mut greeting_resp = [0u8; 2];
+                stream.read_exact(&mut greeting_resp).await
+                    .map_err(|e| format!("SOCKS5 greeting recv: {}", e))?;
+                if greeting_resp[0] != 0x05 {
+                    return Err("SOCKS5: invalid version".into());
+                }
+                if greeting_resp[1] == 0x02 {
+                    // Username/password auth
+                    let u = username.as_deref().unwrap_or("");
+                    let p = password.as_deref().unwrap_or("");
+                    let mut auth = vec![0x01, u.len() as u8];
+                    auth.extend_from_slice(u.as_bytes());
+                    auth.push(p.len() as u8);
+                    auth.extend_from_slice(p.as_bytes());
+                    stream.write_all(&auth).await
+                        .map_err(|e| format!("SOCKS5 auth send: {}", e))?;
+                    stream.flush().await.ok();
+
+                    let mut auth_resp = [0u8; 2];
+                    stream.read_exact(&mut auth_resp).await
+                        .map_err(|e| format!("SOCKS5 auth recv: {}", e))?;
+                    if auth_resp[1] != 0x00 {
+                        return Err("SOCKS5: authentication failed".into());
+                    }
+                } else if greeting_resp[1] != 0x00 {
+                    return Err("SOCKS5: no acceptable auth method".into());
+                }
+
+                // SOCKS5 connect request
+                let (host_part, port_part) = addr.rsplit_once(':')
+                    .ok_or_else(|| format!("Invalid address format: {}", addr))?;
+                let port_num: u16 = port_part.parse()
+                    .map_err(|_| format!("Invalid port: {}", port_part))?;
+
+                let mut req = vec![0x05, 0x01, 0x00, 0x03, host_part.len() as u8];
+                req.extend_from_slice(host_part.as_bytes());
+                req.extend_from_slice(&port_num.to_be_bytes());
+
+                stream.write_all(&req).await
+                    .map_err(|e| format!("SOCKS5 connect send: {}", e))?;
+                stream.flush().await.ok();
+
+                let mut connect_resp = [0u8; 4];
+                stream.read_exact(&mut connect_resp).await
+                    .map_err(|e| format!("SOCKS5 connect recv: {}", e))?;
+                if connect_resp[1] != 0x00 {
+                    let err_msg = match connect_resp[1] {
+                        0x01 => "general SOCKS server failure",
+                        0x02 => "connection not allowed by ruleset",
+                        0x03 => "network unreachable",
+                        0x04 => "host unreachable",
+                        0x05 => "connection refused",
+                        0x06 => "TTL expired",
+                        0x07 => "command not supported",
+                        0x08 => "address type not supported",
+                        _ => "unknown SOCKS error",
+                    };
+                    return Err(format!("SOCKS5: {}", err_msg));
+                }
+
+                // Read the rest of the BND.ADDR + BND.PORT
+                let bnd_type = connect_resp[3];
+                let rest_len = match bnd_type {
+                    0x01 => 4 + 2,     // IPv4
+                    0x03 => 1 + 2,     // Domain (skip len byte)
+                    0x04 => 16 + 2,    // IPv6
+                    _ => 2,
+                };
+                let mut rest = vec![0u8; rest_len];
+                let _ = stream.read_exact(&mut rest).await;
+
+                Ok(stream)
+            }
+            ProxyConfig::Socks4 { host, port, username } => {
+                let proxy_addr = format!("{}:{}", host, port);
+                let mut stream = tokio::time::timeout(timeout, TcpStream::connect(&proxy_addr)).await
+                    .map_err(|_| format!("Timeout connecting to SOCKS4 proxy {}", proxy_addr))?
+                    .map_err(|e| format!("Failed to connect to SOCKS4 proxy {}: {}", proxy_addr, e))?;
+
+                let (host_part, port_part) = addr.rsplit_once(':')
+                    .ok_or_else(|| format!("Invalid address format: {}", addr))?;
+                let port_num: u16 = port_part.parse()
+                    .map_err(|_| format!("Invalid port: {}", port_part))?;
+                let ip_parts: Vec<&str> = host_part.split('.').collect();
+                let user_id = username.as_deref().unwrap_or("");
+
+                let mut req = Vec::with_capacity(9 + user_id.len());
+                req.push(0x04); // SOCKS version
+                req.push(0x01); // CONNECT
+                req.extend_from_slice(&port_num.to_be_bytes());
+
+                if ip_parts.len() == 4 {
+                    // IPv4: resolve locally
+                    for p in &ip_parts {
+                        req.push(p.parse::<u8>().unwrap_or(0));
+                    }
+                } else {
+                    // Domain name - use 0.0.0.x and send domain after userid
+                    req.extend_from_slice(&[0, 0, 0, 1]);
+                }
+                req.extend_from_slice(user_id.as_bytes());
+                req.push(0x00);
+
+                if ip_parts.len() != 4 {
+                    req.extend_from_slice(host_part.as_bytes());
+                    req.push(0x00);
+                }
+
+                stream.write_all(&req).await
+                    .map_err(|e| format!("SOCKS4 connect send: {}", e))?;
+                stream.flush().await.ok();
+
+                let mut resp = [0u8; 8];
+                stream.read_exact(&mut resp).await
+                    .map_err(|e| format!("SOCKS4 connect recv: {}", e))?;
+                if resp[0] != 0x00 {
+                    return Err("SOCKS4: invalid null byte".into());
+                }
+                if resp[1] != 0x5a {
+                    let err_msg = match resp[1] {
+                        0x5b => "request rejected or failed",
+                        0x5c => "cannot connect to identd",
+                        0x5d => "identd username mismatch",
+                        _ => "unknown SOCKS4 error",
+                    };
+                    return Err(format!("SOCKS4: {}", err_msg));
+                }
+
+                Ok(stream)
+            }
+        }
+    }
+}
+
+fn base64_encode(input: &str) -> String {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes = input.as_bytes();
+    let mut result = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        result.push(CHARS[((triple >> 18) & 0x3F) as usize] as char);
+        result.push(CHARS[((triple >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            result.push(CHARS[((triple >> 6) & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+        if chunk.len() > 2 {
+            result.push(CHARS[(triple & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+    }
+    result
 }
 
 impl Default for ProxyConfig {

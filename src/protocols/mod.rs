@@ -7,6 +7,7 @@ pub mod smtp;
 pub mod ssh;
 pub mod telnet;
 
+use std::collections::HashSet;
 use async_trait::async_trait;
 use std::time::Duration;
 use crate::core::credential::Credential;
@@ -42,7 +43,20 @@ pub fn get_protocol(name: &str) -> Option<Box<dyn Protocol>> {
     }
 }
 
-#[allow(dead_code)]
+pub fn default_ports_for_protocols(protocols: &[String]) -> Vec<u16> {
+    let mut seen = HashSet::new();
+    let mut ports = Vec::new();
+    for name in protocols {
+        if let Some(proto) = get_protocol(name) {
+            let port = proto.default_port();
+            if seen.insert(port) {
+                ports.push(port);
+            }
+        }
+    }
+    ports
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

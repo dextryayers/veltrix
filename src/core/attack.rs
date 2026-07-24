@@ -1,10 +1,8 @@
-use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use chrono::Utc;
-use futures::stream::{FuturesUnordered, StreamExt};
-use tokio::sync::Semaphore;
+use futures::future::join_all;
 
 use super::cidr::expand_targets;
 use super::config::AttackConfig;
@@ -13,10 +11,10 @@ use super::result::{AttackSummary, AuthResult};
 use super::rules::{apply_rules, load_rules};
 use super::target::{parse_targets, Target};
 use super::wordlist::{load_combo_list, load_wordlist};
-use crate::protocols::get_protocol;
+use super::worker::{WorkerPool, WorkerTask};
 use crate::proxy::{load_proxy_list, ProxyConfig};
 use crate::utils::output::OutputHandler;
-use crate::utils::patterns::{classify_error, compute_backoff, should_rotate_proxy, should_skip_user, ResponseCategory};
+use crate::utils::patterns::{classify_error, ResponseCategory};
 use crate::utils::ratelimit::{JitterDelay, RateLimiter};
 use crate::utils::resume::SessionState;
 
@@ -30,8 +28,6 @@ pub struct AttackOrchestrator {
     output: OutputHandler,
     rate_limiter: RateLimiter,
     jitter: JitterDelay,
-    proxy_failures: Arc<std::sync::Mutex<Vec<u64>>>,
-    skipped_users: HashSet<String>,
     running: Arc<AtomicBool>,
 }
 
@@ -65,7 +61,6 @@ impl AttackOrchestrator {
         let rate_limiter = RateLimiter::new(config.rate_limit);
         let jitter = JitterDelay::new(config.delay, 100);
 
-        let proxy_count = proxies.len();
         Ok(AttackOrchestrator {
             targets,
             credentials,
@@ -76,8 +71,6 @@ impl AttackOrchestrator {
             rate_limiter,
             jitter,
             config,
-            proxy_failures: Arc::new(std::sync::Mutex::new(vec![0u64; proxy_count.max(1)])),
-            skipped_users: HashSet::new(),
             running,
         })
     }
@@ -110,18 +103,22 @@ impl AttackOrchestrator {
         };
 
         let ports: Vec<u16> = if config.ports.is_empty() {
-            vec![22, 21, 23, 25, 80, 443, 110, 3389, 3306, 587, 993, 995]
+            crate::protocols::default_ports_for_protocols(&protocols)
         } else {
             config.ports.clone()
         };
 
         let mut targets = parse_targets(&target_strings, &protocols, &ports);
 
-        for target in &mut targets {
-            if !target.is_resolved() {
-                let _ = target.resolve(config.timeout).await;
+        let resolve_futures: Vec<_> = targets.iter_mut().map(|t| {
+            let timeout = config.timeout;
+            async move {
+                if !t.is_resolved() {
+                    let _ = t.resolve(timeout).await;
+                }
             }
-        }
+        }).collect();
+        join_all(resolve_futures).await;
 
         if targets.is_empty() {
             return Err("No valid targets after parsing".into());
@@ -206,29 +203,17 @@ impl AttackOrchestrator {
         proxies
     }
 
-    fn get_proxy_for(&self, index: usize) -> Option<ProxyConfig> {
-        if self.proxies.is_empty() {
-            None
-        } else {
-            Some(self.proxies[index % self.proxies.len()].clone())
-        }
-    }
-
     pub async fn run(&mut self) -> AttackSummary {
         let start_time = Utc::now();
         let total_combinations = self.targets.len() * self.credentials.len();
-        let max_concurrent = self.config.threads;
-        let stop_on_first = self.config.stop_on_first;
 
         log::info!("Starting attack: {} targets × {} credentials ({} total attempts)",
             self.targets.len(), self.credentials.len(), total_combinations);
 
         self.output.init_progress(total_combinations as u64);
 
-        let semaphore = Arc::new(Semaphore::new(max_concurrent));
-        let mut attempts = Vec::new();
+        let mut pool = WorkerPool::new(&self.config, Arc::clone(&self.running), self.proxies.clone());
         let mut attempt_count = 0u64;
-        let mut proxy_cycle_counter = 0u64;
 
         'target_loop: for target_idx in 0..self.targets.len() {
             let target = &self.targets[target_idx];
@@ -241,22 +226,8 @@ impl AttackOrchestrator {
 
                 let credential = &self.credentials[cred_idx];
 
-                if self.skipped_users.contains(&credential.username) {
-                    attempt_count += 1;
-                    self.output.inc_progress();
-                    continue;
-                }
-
-                let target_clone = target.clone();
-                let credential_clone = credential.clone();
-                let permit = Arc::clone(&semaphore);
-                let proxy = self.get_proxy_for(proxy_cycle_counter as usize);
-                let timeout = self.config.timeout;
-                let retries = self.config.retries;
-                let stop_early = stop_on_first;
-
                 if let Some(ref session) = self.session {
-                    if session.is_tested(&credential_clone.username, &credential_clone.password) {
+                    if session.is_tested(&credential.username, &credential.password) {
                         attempt_count += 1;
                         self.output.inc_progress();
                         continue;
@@ -266,139 +237,71 @@ impl AttackOrchestrator {
                 self.rate_limiter.wait_if_needed().await;
                 self.jitter.delay().await;
 
-                let protocol_handler = match get_protocol(&target_clone.protocol) {
-                    Some(p) => p,
-                    None => {
-                        self.output.inc_progress();
-                        continue;
-                    }
-                };
-
-                let proxy_fails = Arc::clone(&self.proxy_failures);
-                let current_proxy_idx = proxy_cycle_counter as usize;
-                let running_flag = Arc::clone(&self.running);
-
-                let handle = tokio::spawn(async move {
-                    let _permit = permit.acquire().await.unwrap();
-                    let mut last_result = None;
-                    let current_retries = retries;
-                    let mut current_proxy = proxy;
-
-                    for attempt in 0..=current_retries {
-                        if !running_flag.load(Ordering::SeqCst) {
-                            break;
-                        }
-
-                        let result = protocol_handler
-                            .authenticate(&target_clone, &credential_clone, timeout, &current_proxy)
-                            .await;
-
-                        let classified = classify_error(result.error.as_deref(), result.success);
-
-                        if result.success {
-                            last_result = Some(result);
-                            break;
-                        }
-
-                        if should_skip_user(&classified) {
-                            last_result = Some(AuthResult {
-                                error: Some(format!("Account locked: {}", classified.message)),
-                                ..result
-                            });
-                            break;
-                        }
-
-                        if should_rotate_proxy(&classified) && current_proxy.is_some() {
-                            if let Ok(mut fails) = proxy_fails.lock() {
-                                if current_proxy_idx < fails.len() {
-                                    fails[current_proxy_idx] += 1;
-                                }
-                            }
-                            current_proxy = None;
-                        }
-
-                        if attempt == current_retries {
-                            last_result = Some(result);
-                            break;
-                        }
-
-                        let backoff = compute_backoff(attempt);
-                        tokio::time::sleep(backoff).await;
-                    }
-
-                    (last_result.unwrap(), stop_early)
+                pool.submit(WorkerTask {
+                    target: target.clone(),
+                    credential: credential.clone(),
+                    attempt_index: attempt_count,
                 });
 
-                attempts.push(handle);
                 attempt_count += 1;
-                proxy_cycle_counter += 1;
             }
         }
 
-        let mut stream: FuturesUnordered<_> = attempts.into_iter().collect();
+        let results = pool.collect().await;
+
         let mut successes_global = 0u64;
         let mut failures_global = 0u64;
         let mut errors_global = 0u64;
         let mut lockout_events = 0u64;
         let mut rate_limit_events = 0u64;
 
-        while let Some(fut_result) = stream.next().await {
-            match fut_result {
-                Ok((result, stop_early)) => {
-                    let classified = classify_error(result.error.as_deref(), result.success);
+        for (result, _stop_early) in &results {
+            let classified = classify_error(result.error.as_deref(), result.success);
 
-                    match classified.category {
-                        ResponseCategory::AccountLocked => {
-                            lockout_events += 1;
-                            self.skipped_users.insert(result.username.clone());
-                            log::warn!("Account locked: {} on {}:{}", result.username, result.target_host, result.target_port);
-                        }
-                        ResponseCategory::RateLimited => {
-                            rate_limit_events += 1;
-                            log::warn!("Rate limited on {}:{}, consider increasing delay", result.target_host, result.target_port);
-                        }
-                        _ => {}
-                    }
-
-                    if result.success {
-                        successes_global += 1;
-                    } else if result.error.is_some() {
-                        errors_global += 1;
-                    } else {
-                        failures_global += 1;
-                    }
-
-                    if let Some(ref mut session) = self.session {
-                        session.mark_tested(&result.username, &result.password);
-                        if result.success {
-                            session.add_success(
-                                &result.target_host,
-                                &result.protocol,
-                                &result.username,
-                                &result.password,
-                            );
-                        }
-                        if self.config.resume_file.is_some() {
-                            if let Some(ref resume_path) = self.config.resume_file {
-                                let _ = session.save(resume_path);
-                            }
-                        }
-                    }
-
-                    self.output.write_result(&result);
-                    self.results.push(result.clone());
-                    self.output.inc_progress();
-
-                    if stop_early && result.success {
-                        log::info!("Stop-on-first triggered. Halting.");
-                        break;
-                    }
+            match classified.category {
+                ResponseCategory::AccountLocked => {
+                    lockout_events += 1;
+                    log::warn!("Account locked: {} on {}:{}", result.username, result.target_host, result.target_port);
                 }
-                Err(e) => {
-                    log::error!("Task panicked: {}", e);
-                    errors_global += 1;
+                ResponseCategory::RateLimited => {
+                    rate_limit_events += 1;
+                    log::warn!("Rate limited on {}:{}, consider increasing delay", result.target_host, result.target_port);
+                }
+                _ => {}
+            }
+
+            if result.success {
+                successes_global += 1;
+            } else if result.error.is_some() {
+                errors_global += 1;
+            } else {
+                failures_global += 1;
+            }
+
+            if let Some(ref mut session) = self.session {
+                let prev_count = session.total_attempts;
+                session.mark_tested(&result.username, &result.password);
+                if result.success {
+                    session.add_success(
+                        &result.target_host,
+                        &result.protocol,
+                        &result.username,
+                        &result.password,
+                    );
+                }
+                if self.config.resume_file.is_some() {
+                    let interval = self.config.checkpoint_interval as u64;
+                    if session.total_attempts / interval > prev_count / interval {
+                        if let Some(ref resume_path) = self.config.resume_file {
+                            let _ = session.save(resume_path);
+                        }
+                    }
                 }
             }
+
+            self.output.write_result(result);
+            self.results.push(result.clone());
+            self.output.inc_progress();
         }
 
         self.output.finish_progress();
@@ -410,7 +313,7 @@ impl AttackOrchestrator {
         }
 
         if lockout_events > 0 {
-            log::warn!("Detected {} account lockout(s), skipped users: {:?}", lockout_events, self.skipped_users);
+            log::warn!("Detected {} account lockout(s)", lockout_events);
         }
         if rate_limit_events > 0 {
             log::warn!("Detected {} rate limiting event(s)", rate_limit_events);

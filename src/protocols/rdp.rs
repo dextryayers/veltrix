@@ -473,14 +473,18 @@ impl Protocol for RdpProtocol {
         target: &Target,
         credential: &Credential,
         timeout_dur: Duration,
-        _proxy: &Option<ProxyConfig>,
+        proxy: &Option<ProxyConfig>,
     ) -> AuthResult {
         let start = Instant::now();
         let addr = target.addr_string();
 
         let result = timeout(timeout_dur, async {
-            let mut stream = TcpStream::connect(&addr).await
-                .map_err(|e| format!("Connect: {}", e))?;
+            let mut stream = match proxy {
+                Some(p) => p.tcp_connect(&addr, timeout_dur).await
+                    .map_err(|e| format!("Connect: {}", e))?,
+                None => TcpStream::connect(&addr).await
+                    .map_err(|e| format!("Connect: {}", e))?,
+            };
 
             stream.write_all(RDP_NEG_REQ).await
                 .map_err(|e| format!("Send neg req: {}", e))?;

@@ -22,6 +22,9 @@ pub struct AttackConfig {
     pub output_format: OutputFormat,
     pub resume_file: Option<PathBuf>,
     #[allow(dead_code)]
+    pub config_file: Option<PathBuf>,
+    pub checkpoint_interval: u64,
+    #[allow(dead_code)]
     pub verbose: bool,
     #[allow(dead_code)]
     pub quiet: bool,
@@ -74,6 +77,9 @@ impl AttackConfig {
         }
         if self.max_mutations == 0 {
             return Err("Max mutations must be > 0".into());
+        }
+        if self.checkpoint_interval == 0 {
+            return Err("Checkpoint interval must be > 0".into());
         }
         Ok(())
     }

@@ -3,7 +3,9 @@ use std::time::Duration;
 use clap::Parser;
 use colored::Colorize;
 
+use std::path::Path;
 use crate::core::config::{AttackConfig, OutputFormat};
+use crate::core::config_loader::ConfigFile;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -116,6 +118,10 @@ pub struct CliArgs {
     #[arg(long = "resume", help = "Resume from session file", value_name = "FILE")]
     pub resume: Option<PathBuf>,
 
+    // ── Config ──
+    #[arg(long = "config", help = "JSON config file", value_name = "FILE")]
+    pub config: Option<PathBuf>,
+
     // ── Behavior Options ──
     #[arg(long = "stop-on-first", help = "Stop after first success per target")]
     pub stop_on_first: bool,
@@ -135,35 +141,126 @@ pub struct CliArgs {
 
 impl CliArgs {
     pub fn into_config(self) -> Result<AttackConfig, String> {
-        Ok(AttackConfig {
-            targets: self.targets,
-            target_file: self.target_file,
-            users: self.users,
-            passwords: self.passwords,
-            user_file: self.user_file,
-            password_file: self.password_file,
-            combo_file: self.combo_file,
-            protocols: self.protocols,
-            ports: self.ports,
-            threads: self.threads,
-            timeout: Duration::from_secs(self.timeout),
-            delay: Duration::from_millis(self.delay),
-            rate_limit: self.rate_limit,
-            proxy: self.proxy,
-            proxy_file: self.proxy_file,
-            output_file: self.output,
-            output_format: OutputFormat::from_str(&self.format),
-            resume_file: self.resume,
-            verbose: self.verbose,
-            quiet: self.quiet,
-            no_banner: self.no_banner,
-            single_user_mode: self.single_user,
-            spray_mode: self.spray,
-            stop_on_first: self.stop_on_first,
-            retries: self.retries,
-            rule_file: self.rules,
-            max_mutations: self.max_mutations,
-        })
+        let mut config = AttackConfig {
+            targets: Vec::new(),
+            target_file: None,
+            users: Vec::new(),
+            passwords: Vec::new(),
+            user_file: None,
+            password_file: None,
+            combo_file: None,
+            protocols: Vec::new(),
+            ports: Vec::new(),
+            threads: 10,
+            timeout: Duration::from_secs(10),
+            delay: Duration::ZERO,
+            rate_limit: None,
+            proxy: None,
+            proxy_file: None,
+            output_file: None,
+            output_format: OutputFormat::Plain,
+            resume_file: None,
+            config_file: self.config.clone(),
+            checkpoint_interval: 100,
+            verbose: false,
+            quiet: false,
+            no_banner: false,
+            single_user_mode: false,
+            spray_mode: false,
+            stop_on_first: false,
+            retries: 1,
+            rule_file: None,
+            max_mutations: 500,
+        };
+
+        if let Some(ref config_path) = self.config {
+            let path = Path::new(config_path);
+            if path.exists() {
+                let cf = ConfigFile::load(path)?;
+                cf.merge_into(&mut config);
+            } else {
+                return Err(format!("Config file not found: {}", config_path.display()));
+            }
+        }
+
+        if !self.targets.is_empty() {
+            config.targets = self.targets;
+        }
+        if self.target_file.is_some() {
+            config.target_file = self.target_file;
+        }
+        if !self.users.is_empty() {
+            config.users = self.users;
+        }
+        if !self.passwords.is_empty() {
+            config.passwords = self.passwords;
+        }
+        if self.user_file.is_some() {
+            config.user_file = self.user_file;
+        }
+        if self.password_file.is_some() {
+            config.password_file = self.password_file;
+        }
+        if self.combo_file.is_some() {
+            config.combo_file = self.combo_file;
+        }
+        if !self.protocols.is_empty() {
+            config.protocols = self.protocols;
+        }
+        if !self.ports.is_empty() {
+            config.ports = self.ports;
+        }
+        if self.config.is_some() {
+            // config_file already set above
+        }
+        if self.single_user {
+            config.single_user_mode = true;
+        }
+        if self.spray {
+            config.spray_mode = true;
+        }
+        if self.rules.is_some() {
+            config.rule_file = self.rules;
+        }
+        config.max_mutations = self.max_mutations;
+        config.threads = self.threads;
+        config.timeout = Duration::from_secs(self.timeout);
+        config.delay = Duration::from_millis(self.delay);
+        if self.rate_limit.is_some() {
+            config.rate_limit = self.rate_limit;
+        }
+        if self.retries != 1 {
+            config.retries = self.retries;
+        }
+        if self.proxy.is_some() {
+            config.proxy = self.proxy;
+        }
+        if self.proxy_file.is_some() {
+            config.proxy_file = self.proxy_file;
+        }
+        if self.output.is_some() {
+            config.output_file = self.output;
+        }
+        if self.format != "plain" {
+            config.output_format = OutputFormat::from_str(&self.format);
+        }
+        if self.resume.is_some() {
+            config.resume_file = self.resume;
+        }
+        if self.verbose {
+            config.verbose = true;
+        }
+        if self.quiet {
+            config.quiet = true;
+        }
+        if self.no_banner {
+            config.no_banner = true;
+        }
+        if self.stop_on_first {
+            config.stop_on_first = true;
+        }
+
+        Ok(config)
     }
 
     pub fn should_show_banner(&self) -> bool {

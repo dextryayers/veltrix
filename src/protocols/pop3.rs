@@ -27,13 +27,16 @@ impl Protocol for Pop3Protocol {
         target: &Target,
         credential: &Credential,
         timeout_dur: Duration,
-        _proxy: &Option<ProxyConfig>,
+        proxy: &Option<ProxyConfig>,
     ) -> AuthResult {
         let start = Instant::now();
         let addr = target.addr_string();
 
         match timeout(timeout_dur, async {
-            let mut stream = TcpStream::connect(&addr).await.map_err(|e| format!("Connect: {}", e))?;
+            let mut stream = match proxy {
+                Some(p) => p.tcp_connect(&addr, timeout_dur).await.map_err(|e| format!("Connect: {}", e))?,
+                None => TcpStream::connect(&addr).await.map_err(|e| format!("Connect: {}", e))?,
+            };
             let (reader, mut writer) = stream.split();
             let mut buf_reader = BufReader::new(reader);
             let mut buf = Vec::new();

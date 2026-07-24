@@ -33,12 +33,15 @@ impl Protocol for TelnetProtocol {
         target: &Target,
         credential: &Credential,
         timeout_dur: Duration,
-        _proxy: &Option<ProxyConfig>,
+        proxy: &Option<ProxyConfig>,
     ) -> AuthResult {
         let start = Instant::now();
 
         match timeout(timeout_dur, async {
-            let mut stream = TcpStream::connect(target.addr_string()).await.map_err(|e| e.to_string())?;
+            let mut stream = match proxy {
+                Some(p) => p.tcp_connect(&target.addr_string(), timeout_dur).await?,
+                None => TcpStream::connect(target.addr_string()).await.map_err(|e| e.to_string())?,
+            };
             let (reader, mut writer) = stream.split();
             let mut buf_reader = BufReader::new(reader);
             let mut buf = Vec::new();
