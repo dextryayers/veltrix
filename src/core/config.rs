@@ -23,7 +23,9 @@ pub struct AttackConfig {
     pub resume_file: Option<PathBuf>,
     #[allow(dead_code)]
     pub verbose: bool,
+    #[allow(dead_code)]
     pub quiet: bool,
+    #[allow(dead_code)]
     pub no_banner: bool,
     pub single_user_mode: bool,
     pub spray_mode: bool,

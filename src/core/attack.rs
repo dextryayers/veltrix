@@ -46,6 +46,8 @@ impl AttackOrchestrator {
         let output = OutputHandler::new(
             config.output_format.clone(),
             config.output_file.as_deref(),
+            config.quiet,
+            config.verbose,
         )?;
 
         let session = if let Some(resume_path) = &config.resume_file {

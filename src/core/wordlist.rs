@@ -48,12 +48,14 @@ pub async fn load_combo_list(path: &Path) -> Result<Vec<(String, String)>, Strin
     Ok(combos)
 }
 
+#[allow(dead_code)]
 pub struct StreamingWordlist {
     path: std::path::PathBuf,
     buffer: Vec<String>,
     position: usize,
 }
 
+#[allow(dead_code)]
 impl StreamingWordlist {
     pub fn new(path: &std::path::Path) -> Self {
         StreamingWordlist {
@@ -63,21 +65,18 @@ impl StreamingWordlist {
         }
     }
 
-    pub async fn load_chunk(&mut self, chunk_size: usize) -> Result<bool, String> {
+    pub async fn load_chunk(&mut self, _chunk_size: usize) -> Result<bool, String> {
         if self.position == 0 && self.buffer.is_empty() {
             let file = File::open(&self.path).await
                 .map_err(|e| format!("Failed to open {}: {}", self.path.display(), e))?;
             let reader = BufReader::new(file);
             let mut stream = reader.lines();
-            let mut count = 0;
-
             while let Some(line) = stream.next_line().await
                 .map_err(|e| format!("Read error: {}", e))?
             {
                 let trimmed = line.trim().to_string();
                 if !trimmed.is_empty() && !trimmed.starts_with('#') {
                     self.buffer.push(trimmed);
-                    count += 1;
                 }
             }
             return Ok(!self.buffer.is_empty());

@@ -15,10 +15,13 @@ pub struct OutputHandler {
     start_time: Instant,
     success_count: u64,
     fail_count: u64,
+    #[allow(dead_code)]
+    quiet: bool,
+    verbose: bool,
 }
 
 impl OutputHandler {
-    pub fn new(format: OutputFormat, output_path: Option<&Path>) -> Result<Self, String> {
+    pub fn new(format: OutputFormat, output_path: Option<&Path>, quiet: bool, verbose: bool) -> Result<Self, String> {
         let (file, writer) = if let Some(path) = output_path {
             let f = std::fs::File::create(path)
                 .map_err(|e| format!("Cannot create output file: {}", e))?;
@@ -36,6 +39,8 @@ impl OutputHandler {
             start_time: Instant::now(),
             success_count: 0,
             fail_count: 0,
+            quiet,
+            verbose,
         })
     }
 
@@ -72,7 +77,13 @@ impl OutputHandler {
 
     pub fn write_result(&mut self, result: &AuthResult) {
         if result.success {
+            self.success_count += 1;
             println!("{}", result.display());
+        } else {
+            self.fail_count += 1;
+            if self.verbose {
+                eprintln!("{}", result.display());
+            }
         }
 
         if let Some(file) = &mut self.file {
