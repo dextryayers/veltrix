@@ -80,7 +80,9 @@ impl OutputHandler {
     pub fn write_result(&mut self, result: &AuthResult) {
         if result.success {
             self.success_count += 1;
-            println!("{}", result.display());
+            if !self.quiet {
+                println!("{}", result.display());
+            }
         } else {
             self.fail_count += 1;
             if self.verbose {

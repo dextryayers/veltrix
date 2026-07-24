@@ -193,15 +193,17 @@ impl ProxyConfig {
     pub async fn tcp_connect(&self, addr: &str, timeout: Duration) -> Result<TcpStream, String> {
         match self {
             ProxyConfig::None => {
-                tokio::time::timeout(timeout, TcpStream::connect(addr)).await
+                let stream = tokio::time::timeout(timeout, TcpStream::connect(addr)).await
                     .map_err(|_| format!("Timeout connecting to {}", addr))?
-                    .map_err(|e| format!("Failed to connect to {}: {}", addr, e))
+                    .map_err(|e| format!("Failed to connect to {}: {}", addr, e))?;
+                return set_tcp_keepalive(stream);
             }
             ProxyConfig::Http { host, port, username, password, .. } => {
                 let proxy_addr = format!("{}:{}", host, port);
-                let mut stream = tokio::time::timeout(timeout, TcpStream::connect(&proxy_addr)).await
+                let stream = tokio::time::timeout(timeout, TcpStream::connect(&proxy_addr)).await
                     .map_err(|_| format!("Timeout connecting to proxy {}", proxy_addr))?
                     .map_err(|e| format!("Failed to connect to proxy {}: {}", proxy_addr, e))?;
+                let mut stream = set_tcp_keepalive(stream)?;
 
                 let auth_header = if let (Some(u), Some(p)) = (username, password) {
                     let credentials = base64_encode(&format!("{}:{}", u, p));
@@ -231,11 +233,11 @@ impl ProxyConfig {
             }
             ProxyConfig::Socks5 { host, port, username, password } => {
                 let proxy_addr = format!("{}:{}", host, port);
-                let mut stream = tokio::time::timeout(timeout, TcpStream::connect(&proxy_addr)).await
+                let stream = tokio::time::timeout(timeout, TcpStream::connect(&proxy_addr)).await
                     .map_err(|_| format!("Timeout connecting to SOCKS5 proxy {}", proxy_addr))?
                     .map_err(|e| format!("Failed to connect to SOCKS5 proxy {}: {}", proxy_addr, e))?;
+                let mut stream = set_tcp_keepalive(stream)?;
 
-                // SOCKS5 greeting: no auth or username/password
                 let auth_method = if username.is_some() { 0x02 } else { 0x00 };
                 stream.write_all(&[0x05, 0x01, auth_method]).await
                     .map_err(|e| format!("SOCKS5 greeting send: {}", e))?;
@@ -248,7 +250,6 @@ impl ProxyConfig {
                     return Err("SOCKS5: invalid version".into());
                 }
                 if greeting_resp[1] == 0x02 {
-                    // Username/password auth
                     let u = username.as_deref().unwrap_or("");
                     let p = password.as_deref().unwrap_or("");
                     let mut auth = vec![0x01, u.len() as u8];
@@ -269,7 +270,6 @@ impl ProxyConfig {
                     return Err("SOCKS5: no acceptable auth method".into());
                 }
 
-                // SOCKS5 connect request
                 let (host_part, port_part) = addr.rsplit_once(':')
                     .ok_or_else(|| format!("Invalid address format: {}", addr))?;
                 let port_num: u16 = port_part.parse()
@@ -301,12 +301,11 @@ impl ProxyConfig {
                     return Err(format!("SOCKS5: {}", err_msg));
                 }
 
-                // Read the rest of the BND.ADDR + BND.PORT
                 let bnd_type = connect_resp[3];
                 let rest_len = match bnd_type {
-                    0x01 => 4 + 2,     // IPv4
-                    0x03 => 1 + 2,     // Domain (skip len byte)
-                    0x04 => 16 + 2,    // IPv6
+                    0x01 => 4 + 2,
+                    0x03 => 1 + 2,
+                    0x04 => 16 + 2,
                     _ => 2,
                 };
                 let mut rest = vec![0u8; rest_len];
@@ -316,9 +315,10 @@ impl ProxyConfig {
             }
             ProxyConfig::Socks4 { host, port, username } => {
                 let proxy_addr = format!("{}:{}", host, port);
-                let mut stream = tokio::time::timeout(timeout, TcpStream::connect(&proxy_addr)).await
+                let stream = tokio::time::timeout(timeout, TcpStream::connect(&proxy_addr)).await
                     .map_err(|_| format!("Timeout connecting to SOCKS4 proxy {}", proxy_addr))?
                     .map_err(|e| format!("Failed to connect to SOCKS4 proxy {}: {}", proxy_addr, e))?;
+                let mut stream = set_tcp_keepalive(stream)?;
 
                 let (host_part, port_part) = addr.rsplit_once(':')
                     .ok_or_else(|| format!("Invalid address format: {}", addr))?;
@@ -328,17 +328,15 @@ impl ProxyConfig {
                 let user_id = username.as_deref().unwrap_or("");
 
                 let mut req = Vec::with_capacity(9 + user_id.len());
-                req.push(0x04); // SOCKS version
-                req.push(0x01); // CONNECT
+                req.push(0x04);
+                req.push(0x01);
                 req.extend_from_slice(&port_num.to_be_bytes());
 
                 if ip_parts.len() == 4 {
-                    // IPv4: resolve locally
                     for p in &ip_parts {
                         req.push(p.parse::<u8>().unwrap_or(0));
                     }
                 } else {
-                    // Domain name - use 0.0.0.x and send domain after userid
                     req.extend_from_slice(&[0, 0, 0, 1]);
                 }
                 req.extend_from_slice(user_id.as_bytes());
@@ -523,6 +521,14 @@ mod tests {
     }
 }
 
+pub fn parse_proxy_chain(input: &str) -> Vec<ProxyConfig> {
+    input.split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| ProxyConfig::parse(s).ok())
+        .collect()
+}
+
 pub fn load_proxy_list(path: &std::path::Path) -> Result<Vec<ProxyConfig>, AttackError> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| AttackError::io("proxy", format!("Failed to read proxy file: {}", e)))?;
@@ -539,4 +545,13 @@ pub fn load_proxy_list(path: &std::path::Path) -> Result<Vec<ProxyConfig>, Attac
         }
     }
     Ok(proxies)
+}
+
+fn set_tcp_keepalive(stream: TcpStream) -> Result<TcpStream, String> {
+    let std_stream = stream.into_std()
+        .map_err(|e| format!("into_std: {}", e))?;
+    let sock_ref = socket2::SockRef::from(&std_stream);
+    let _ = sock_ref.set_keepalive(true);
+    TcpStream::from_std(std_stream)
+        .map_err(|e| format!("from_std: {}", e))
 }

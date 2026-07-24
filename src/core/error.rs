@@ -2,6 +2,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum AttackError {
     Config(String),
     Io { context: String, detail: String },
@@ -59,6 +60,7 @@ impl AttackError {
         }
     }
 
+    #[allow(dead_code)]
     pub fn protocol(protocol: impl Into<String>, detail: impl Into<String>) -> Self {
         AttackError::Protocol {
             protocol: protocol.into(),

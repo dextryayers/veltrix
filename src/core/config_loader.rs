@@ -113,6 +113,7 @@ impl Default for PerformanceSection {
 pub struct ProxySection {
     pub proxy: Option<String>,
     pub proxy_file: Option<String>,
+    pub proxy_chain: Option<String>,
 }
 
 impl Default for ProxySection {
@@ -120,6 +121,7 @@ impl Default for ProxySection {
         ProxySection {
             proxy: None,
             proxy_file: None,
+            proxy_chain: None,
         }
     }
 }
@@ -243,6 +245,9 @@ impl ConfigFile {
         if let Some(f) = pr.proxy_file {
             config.proxy_file = Some(PathBuf::from(f));
         }
+        if let Some(c) = pr.proxy_chain {
+            config.proxy_chain = Some(c);
+        }
 
         let o = self.output;
         if let Some(f) = o.file {
@@ -274,23 +279,18 @@ impl ConfigFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
 
-    fn write_temp_config(content: &str) -> (std::path::PathBuf, std::fs::File) {
+    fn write_config(content: &str, name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir();
-        let path = dir.join("test_veltrix_config.json");
-        let mut f = std::fs::File::create(&path).unwrap();
-        write!(f, "{}", content).unwrap();
-        (path, f)
+        let path = dir.join(name);
+        std::fs::write(&path, content).unwrap();
+        path
     }
 
     #[test]
     fn test_load_valid_config() {
-        let json = r#"{
-            "attack": { "targets": ["10.0.0.1:22"], "protocols": ["ssh"] },
-            "credentials": { "users": ["admin"], "passwords": ["pass"] }
-        }"#;
-        let (path, _f) = write_temp_config(json);
+        let json = r#"{"attack":{"targets":["10.0.0.1:22"],"protocols":["ssh"]},"credentials":{"users":["admin"],"passwords":["pass"]}}"#;
+        let path = write_config(json, "test_valid_config.json");
         let cf = ConfigFile::load(&path).unwrap();
         assert_eq!(cf.attack.targets, vec!["10.0.0.1:22"]);
         assert_eq!(cf.attack.protocols, vec!["ssh"]);
@@ -300,14 +300,13 @@ mod tests {
 
     #[test]
     fn test_load_invalid_config_fails() {
-        let (path, _f) = write_temp_config("not valid json");
+        let path = write_config("not valid json", "test_invalid_config.json");
         assert!(ConfigFile::load(&path).is_err());
         std::fs::remove_file(&path).ok();
     }
 
-    #[test]
-    fn test_merge_into_targets() {
-        let mut cfg = AttackConfig {
+    fn base_config() -> AttackConfig {
+        AttackConfig {
             targets: vec![],
             target_file: None,
             users: vec![],
@@ -323,8 +322,9 @@ mod tests {
             rate_limit: None,
             proxy: None,
             proxy_file: None,
+            proxy_chain: None,
             output_file: None,
-            output_format: super::config::OutputFormat::Plain,
+            output_format: crate::core::config::OutputFormat::Plain,
             resume_file: None,
             config_file: None,
             checkpoint_interval: 100,
@@ -338,7 +338,12 @@ mod tests {
             rule_file: None,
             max_mutations: 500,
             max_password_len: None,
-        };
+        }
+    }
+
+    #[test]
+    fn test_merge_into_targets() {
+        let mut cfg = base_config();
         let cf = ConfigFile {
             attack: AttackSection {
                 targets: vec!["10.0.0.1:22".into()],
@@ -361,7 +366,7 @@ mod tests {
                 threads: None, timeout: None, delay: None,
                 rate_limit: None, retries: None,
             },
-            proxy: ProxySection { proxy: None, proxy_file: None },
+            proxy: ProxySection { proxy: None, proxy_file: None, proxy_chain: None },
             output: OutputSection { file: None, format: None, resume: None },
             behavior: BehaviorSection {
                 stop_on_first: None, verbose: None,
@@ -377,43 +382,14 @@ mod tests {
 
     #[test]
     fn test_merge_into_performance_overrides() {
-        let json = r#"{
-            "performance": { "threads": 50, "timeout": 30, "retries": 3 }
-        }"#;
-        let (path, _f) = write_temp_config(json);
+        let json = r#"{"performance":{"threads":50,"timeout":30,"retries":3}}"#;
+        let path = write_config(json, "test_perf_config.json");
         let cf = ConfigFile::load(&path).unwrap();
-        let mut cfg = AttackConfig {
-            targets: vec!["10.0.0.1:22".into()],
-            target_file: None,
-            users: vec!["admin".into()],
-            passwords: vec!["pass".into()],
-            user_file: None,
-            password_file: None,
-            combo_file: None,
-            protocols: vec!["ssh".into()],
-            ports: vec![],
-            threads: 10,
-            timeout: std::time::Duration::from_secs(5),
-            delay: std::time::Duration::ZERO,
-            rate_limit: None,
-            proxy: None,
-            proxy_file: None,
-            output_file: None,
-            output_format: super::config::OutputFormat::Plain,
-            resume_file: None,
-            config_file: None,
-            checkpoint_interval: 100,
-            verbose: false,
-            quiet: false,
-            no_banner: false,
-            single_user_mode: false,
-            spray_mode: false,
-            stop_on_first: false,
-            retries: 1,
-            rule_file: None,
-            max_mutations: 500,
-            max_password_len: None,
-        };
+        let mut cfg = base_config();
+        cfg.targets = vec!["10.0.0.1:22".into()];
+        cfg.users = vec!["admin".into()];
+        cfg.passwords = vec!["pass".into()];
+        cfg.protocols = vec!["ssh".into()];
         cf.merge_into(&mut cfg);
         assert_eq!(cfg.threads, 50);
         assert_eq!(cfg.timeout.as_secs(), 30);

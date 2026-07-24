@@ -50,12 +50,14 @@ pub async fn load_combo_list(path: &Path) -> Result<Vec<(String, String)>, Attac
     Ok(combos)
 }
 
+#[allow(dead_code)]
 pub struct StreamingWordlist {
     path: std::path::PathBuf,
     buffer: Vec<String>,
     position: usize,
 }
 
+#[allow(dead_code)]
 impl StreamingWordlist {
     pub fn new(path: &std::path::Path) -> Self {
         StreamingWordlist {

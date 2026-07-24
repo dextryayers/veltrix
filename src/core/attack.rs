@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use chrono::Utc;
 use futures::future::join_all;
+use tokio::sync::Semaphore;
 
 use super::cidr::expand_targets;
 use super::config::AttackConfig;
@@ -14,7 +15,7 @@ use super::rules::{apply_rules, load_rules};
 use super::target::{parse_targets, Target};
 use super::wordlist::{load_combo_list, load_wordlist};
 use super::worker::{WorkerPool, WorkerTask};
-use crate::proxy::{load_proxy_list, ProxyConfig};
+use crate::proxy::{load_proxy_list, parse_proxy_chain, ProxyConfig};
 use crate::utils::output::OutputHandler;
 use crate::utils::patterns::{classify_error, ResponseCategory};
 use crate::utils::ratelimit::{JitterDelay, RateLimiter};
@@ -120,9 +121,12 @@ impl AttackOrchestrator {
             log::info!("Removed {} duplicate targets", before - targets.len());
         }
 
+        let dns_semaphore = Arc::new(Semaphore::new(50));
         let resolve_futures: Vec<_> = targets.iter_mut().map(|t| {
             let timeout = config.timeout;
+            let permit = Arc::clone(&dns_semaphore);
             async move {
+                let _guard = permit.acquire().await;
                 if !t.is_resolved() {
                     let _ = t.resolve(timeout).await;
                 }
@@ -209,6 +213,10 @@ impl AttackOrchestrator {
             if let Ok(p) = ProxyConfig::parse(single_proxy) {
                 proxies.push(p);
             }
+        }
+        if let Some(ref chain) = config.proxy_chain {
+            let chain_proxies = parse_proxy_chain(chain);
+            proxies.extend(chain_proxies);
         }
         proxies
     }

@@ -303,6 +303,16 @@ fn compute_pub_key_auth(ntlm_response: &[u8]) -> Vec<u8> {
     Sha256::digest(ntlm_response).to_vec()
 }
 
+fn split_domain_user(input: &str) -> (String, String) {
+    if let Some(idx) = input.find('\\') {
+        let domain = input[..idx].to_string();
+        let user = input[idx + 1..].to_string();
+        (domain, user)
+    } else {
+        ("".to_string(), input.to_string())
+    }
+}
+
 async fn perform_credssp_exchange(
     tls_stream: tokio_native_tls::TlsStream<TcpStream>,
     target: &Target,
@@ -310,9 +320,9 @@ async fn perform_credssp_exchange(
     start: Instant,
 ) -> AuthResult {
     let (mut tls_reader, mut tls_writer) = tokio::io::split(tls_stream);
-    let domain = "";
+    let (domain, username) = split_domain_user(&credential.username);
 
-    let nego_msg = build_ntlmssp_negotiate(domain, &target.host);
+    let nego_msg = build_ntlmssp_negotiate(&domain, &target.host);
     let tsrequest = build_credssp_tsrequest(&nego_msg);
     if tls_writer.write_all(&tsrequest).await.is_err() {
         return AuthResult::new(
@@ -379,8 +389,8 @@ async fn perform_credssp_exchange(
 
     let auth_msg = build_ntlmv2_auth(
         &credential.password,
-        &credential.username,
-        domain,
+        &username,
+        &domain,
         &server_challenge,
         &target_info,
     );

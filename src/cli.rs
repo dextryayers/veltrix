@@ -47,7 +47,7 @@ pub struct CliArgs {
     #[arg(
         short = 'P',
         long = "protocol",
-        help = "Protocol(s): ssh, ftp, telnet, smtp, pop3, rdp, mysql, http",
+        help = "Protocol(s): ssh, ftp, telnet, smtp, pop3, rdp, mysql, postgres, ldap, redis, http",
         value_name = "PROTO",
         value_delimiter = ',',
         required_unless_present = "list_protocols"
@@ -112,6 +112,9 @@ pub struct CliArgs {
     #[arg(long = "proxy-file", help = "Proxy rotation list (one per line)", value_name = "FILE")]
     pub proxy_file: Option<PathBuf>,
 
+    #[arg(long = "proxy-chain", help = "Comma-separated proxy chain: type://host:port,...", value_name = "PROXIES")]
+    pub proxy_chain: Option<String>,
+
     // ── Output Options ──
     #[arg(short = 'o', long = "output", help = "Write results to FILE", value_name = "FILE")]
     pub output: Option<PathBuf>,
@@ -139,8 +142,6 @@ pub struct CliArgs {
     #[arg(long = "no-banner", help = "Hide startup banner")]
     pub no_banner: bool,
 
-    #[arg(short = 'h', long = "help", help = "Print help")]
-    pub help: bool,
 }
 
 impl CliArgs {
@@ -161,6 +162,7 @@ impl CliArgs {
             rate_limit: None,
             proxy: None,
             proxy_file: None,
+            proxy_chain: None,
             output_file: None,
             output_format: OutputFormat::Plain,
             resume_file: None,
@@ -246,6 +248,9 @@ impl CliArgs {
         if self.proxy_file.is_some() {
             config.proxy_file = self.proxy_file;
         }
+        if self.proxy_chain.is_some() {
+            config.proxy_chain = self.proxy_chain;
+        }
         if self.output.is_some() {
             config.output_file = self.output;
         }
@@ -300,5 +305,8 @@ pub fn print_protocols() {
     println!("  {:<12} {:<10} {}", "pop3", "110", "USER/PASS, APOP");
     println!("  {:<12} {:<10} {}", "rdp", "3389", "NLA, RDP Standard");
     println!("  {:<12} {:<10} {}", "mysql", "3306", "mysql_native_password");
+    println!("  {:<12} {:<10} {}", "postgres", "5432", "md5, cleartext");
+    println!("  {:<12} {:<10} {}", "ldap", "389", "simple bind");
+    println!("  {:<12} {:<10} {}", "redis", "6379", "AUTH");
     println!("  {:<12} {:<10} {}", "http", "80/443", "Basic, Digest");
 }

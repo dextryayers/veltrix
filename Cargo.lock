@@ -1971,6 +1971,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "md5"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ebb8d8732c6a6df3d8f032a82911cfc747e00efb95cc46e8d0acd5b5b88570c"
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3574,6 +3580,7 @@ dependencies = [
  "lettre",
  "log",
  "md4",
+ "md5",
  "mysql_async",
  "native-tls",
  "rand",
@@ -3584,6 +3591,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2 0.11.0",
+ "socket2 0.6.5",
  "ssh2",
  "suppaftp",
  "tokio",

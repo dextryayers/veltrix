@@ -67,6 +67,7 @@ impl TargetSpec {
         }
     }
 
+    #[allow(dead_code)]
     pub fn host_count(&self) -> u64 {
         match self {
             TargetSpec::Single { .. } => 1,
