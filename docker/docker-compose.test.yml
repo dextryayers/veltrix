@@ -1,0 +1,67 @@
+version: '3.8'
+
+services:
+  ssh-server:
+    build:
+      context: ./ssh
+      dockerfile: Dockerfile
+    ports:
+      - "2222:22"
+    networks:
+      veltrix-net:
+        ipv4_address: 10.10.0.10
+
+  ftp-server:
+    build:
+      context: ./ftp
+      dockerfile: Dockerfile
+    ports:
+      - "2121:21"
+      - "30000-30009:30000-30009"
+    networks:
+      veltrix-net:
+        ipv4_address: 10.10.0.11
+
+  mysql-server:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: testpass
+      MYSQL_USER: testuser
+      MYSQL_PASSWORD: testpass
+      MYSQL_DATABASE: testdb
+    ports:
+      - "3307:3306"
+    networks:
+      veltrix-net:
+        ipv4_address: 10.10.0.12
+
+  telnet-server:
+    image: amouat/telnetd
+    ports:
+      - "2323:23"
+    networks:
+      veltrix-net:
+        ipv4_address: 10.10.0.13
+
+  smtp-server:
+    image: namshi/smtp
+    ports:
+      - "2525:25"
+    networks:
+      veltrix-net:
+        ipv4_address: 10.10.0.14
+
+  http-server:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    networks:
+      veltrix-net:
+        ipv4_address: 10.10.0.15
+
+networks:
+  veltrix-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.0.0/16

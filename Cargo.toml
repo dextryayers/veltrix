@@ -1,0 +1,64 @@
+[package]
+name = "veltrix"
+version = "1.0.0"
+edition = "2021"
+description = "Multi-protocol brute force toolkit for security professionals"
+authors = ["aniippxploit"]
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+csv = "1"
+
+# Time & display
+chrono = { version = "0.4", features = ["serde"] }
+colored = "2"
+indicatif = { version = "0.17", features = ["tokio"] }
+
+# Utilities
+regex = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+rpassword = "7"
+tokio-util = "0.7"
+trust-dns-resolver = "0.23"
+log = "0.4"
+env_logger = "0.11"
+
+# SSH
+ssh2 = "0.9"
+
+# FTP
+suppaftp = { version = "5", features = ["async-secure", "async-trait"] }
+
+# SMTP
+lettre = { version = "0.11", features = ["builder", "smtp-transport", "tokio1-native-tls", "tokio1"] }
+
+# MySQL
+mysql_async = "0.34"
+
+# HTTP
+reqwest = { version = "0.12", features = ["socks", "cookies", "json"] }
+
+# POP3
+async-native-tls = "0.5"
+
+# DNS
+trust-dns-proto = "0.23"
+
+# Async trait
+async-trait = "0.1"
+md4 = "0.11.0"
+hmac = "0.13.0"
+sha2 = "0.11.0"
+rand = "0.8"
+tokio-native-tls = "0.3.1"
+native-tls = "0.2.18"
+ctrlc = "3.5.2"

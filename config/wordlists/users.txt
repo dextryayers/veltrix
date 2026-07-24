@@ -1,0 +1,16 @@
+admin
+root
+testuser
+operator
+user
+guest
+backup
+admin1
+administrator
+webadmin
+sysadmin
+manager
+support
+admin123
+default
+nobody

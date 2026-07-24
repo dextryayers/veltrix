@@ -1,0 +1,56 @@
+# Veltrix Rule File — Hybrid Attack Mutation Rules
+# Format: <operation>[argument]
+# Operations:
+#   $<n>    — append number 0..n
+#   ^<n>    — prepend number 0..n
+#   @<str>  — append string
+#   !<str>  — prepend string
+#   ~<n>    — capitalize (0=lower, 1=upper, 2=title)
+#   &<from>:<to> — leet speak substitution
+#
+# Order: rules are applied sequentially per word
+
+# ── Year suffixes ──
+$2024
+$2025
+$2026
+$2023
+$2020
+$2019
+$2018
+$2017
+$2016
+$2015
+$2024!
+
+# ── Common appends ──
+@123
+@123456
+@1234
+@1
+@!
+@2024
+@admin
+@pass
+@me
+
+# ── Common prepends ──
+!admin
+!pass
+!Admin
+!super
+!root
+
+# ── Capitalization ──
+~1
+~2
+
+# ── Leet speak ──
+&a:@
+&a:4
+&e:3
+&i:1
+&o:0
+&s:$
+&s:5
+&t:7
