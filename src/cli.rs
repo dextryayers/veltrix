@@ -102,6 +102,18 @@ pub struct CliArgs {
     #[arg(long = "retries", help = "Connection retries", default_value = "1", value_name = "N")]
     pub retries: u32,
 
+    // ── RDP Options ──
+    #[arg(long = "rdp-domain", help = "RDP domain (prepended to username)", value_name = "DOMAIN")]
+    pub rdp_domain: Option<String>,
+
+    // ── HTTP Form Options ──
+    #[arg(long = "http-userfield", help = "HTTP form username field name", value_name = "FIELD")]
+    pub http_userfield: Option<String>,
+    #[arg(long = "http-passfield", help = "HTTP form password field name", value_name = "FIELD")]
+    pub http_passfield: Option<String>,
+    #[arg(long = "http-success", help = "HTTP form success indicator string", value_name = "TEXT")]
+    pub http_success: Option<String>,
+
     #[arg(long = "max-password-len", help = "Truncate passwords to N characters", value_name = "N")]
     pub max_password_len: Option<usize>,
 
@@ -168,6 +180,10 @@ impl CliArgs {
             resume_file: None,
             config_file: self.config.clone(),
             checkpoint_interval: 100,
+            rdp_domain: None,
+            http_userfield: None,
+            http_passfield: None,
+            http_success: None,
             verbose: false,
             quiet: false,
             no_banner: false,
@@ -250,6 +266,18 @@ impl CliArgs {
         }
         if self.proxy_chain.is_some() {
             config.proxy_chain = self.proxy_chain;
+        }
+        if self.rdp_domain.is_some() {
+            config.rdp_domain = self.rdp_domain;
+        }
+        if self.http_userfield.is_some() {
+            config.http_userfield = self.http_userfield;
+        }
+        if self.http_passfield.is_some() {
+            config.http_passfield = self.http_passfield;
+        }
+        if self.http_success.is_some() {
+            config.http_success = self.http_success;
         }
         if self.output.is_some() {
             config.output_file = self.output;

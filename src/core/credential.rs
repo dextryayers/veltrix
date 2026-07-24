@@ -11,32 +11,27 @@ impl Credential {
         Credential { username, password }
     }
 
-    #[allow(dead_code)]
-    pub fn display(&self) -> String {
-        format!("{}:{}", self.username, self.password)
-    }
-}
-
-#[allow(dead_code)]
-pub fn parse_combo_line(line: &str) -> Option<Credential> {
-    let line = line.trim();
-    if line.is_empty() || line.starts_with('#') {
-        return None;
-    }
-    let parts: Vec<&str> = line.splitn(2, ':').collect();
-    if parts.len() == 2 {
-        let username = parts[0].trim().to_string();
-        let password = parts[1].trim().to_string();
-        if !username.is_empty() && !password.is_empty() {
-            return Some(Credential::new(username, password));
-        }
-    }
-    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse_combo_line(line: &str) -> Option<Credential> {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            return None;
+        }
+        let parts: Vec<&str> = line.splitn(2, ':').collect();
+        if parts.len() == 2 {
+            let username = parts[0].trim().to_string();
+            let password = parts[1].trim().to_string();
+            if !username.is_empty() && !password.is_empty() {
+                return Some(Credential::new(username, password));
+            }
+        }
+        None
+    }
 
     #[test]
     fn test_credential_new() {

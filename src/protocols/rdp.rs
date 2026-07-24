@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use md4::{Md4, Digest as Md4Digest};
 use hmac::{Hmac, Mac, KeyInit};
 use sha2::Sha256;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -14,6 +15,16 @@ use crate::proxy::ProxyConfig;
 use super::Protocol;
 
 pub struct RdpProtocol;
+
+static RDP_DOMAIN: OnceLock<String> = OnceLock::new();
+
+pub fn set_domain(domain: &str) {
+    let _ = RDP_DOMAIN.set(domain.to_string());
+}
+
+pub fn get_domain() -> Option<&'static str> {
+    RDP_DOMAIN.get().map(|s| s.as_str())
+}
 
 const RDP_NEG_REQ: &[u8] = &[
     0x03, 0x00, 0x00, 0x2b, 0x1e, 0xe0, 0x00, 0x00,
@@ -304,6 +315,9 @@ fn compute_pub_key_auth(ntlm_response: &[u8]) -> Vec<u8> {
 }
 
 fn split_domain_user(input: &str) -> (String, String) {
+    if let Some(domain) = get_domain() {
+        return (domain.to_string(), input.to_string());
+    }
     if let Some(idx) = input.find('\\') {
         let domain = input[..idx].to_string();
         let user = input[idx + 1..].to_string();

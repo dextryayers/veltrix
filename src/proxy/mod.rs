@@ -25,6 +25,9 @@ pub enum ProxyConfig {
         username: Option<String>,
         password: Option<String>,
     },
+    Chain {
+        proxies: Vec<ProxyConfig>,
+    },
     None,
 }
 
@@ -86,6 +89,7 @@ impl ProxyConfig {
             }
             ProxyConfig::Socks4 { host, port, .. } => format!("socks4://{}:{}", host, port),
             ProxyConfig::Socks5 { host, port, .. } => format!("socks5://{}:{}", host, port),
+            ProxyConfig::Chain { proxies } => format!("chain({})", proxies.len()),
             ProxyConfig::None => "none".into(),
         }
     }
@@ -135,45 +139,34 @@ impl ProxyConfig {
                 let url = format!("socks4://{}:{}", host, port);
                 reqwest::Proxy::all(&url).ok()
             }
+            ProxyConfig::Chain { proxies } => {
+                proxies.first().and_then(|p| p.to_reqwest_proxy())
+            }
             ProxyConfig::None => None,
         }
     }
+}
 
-    #[allow(dead_code)]
-    pub fn connect_string(&self) -> Option<String> {
+
+impl ProxyConfig {
+    pub fn host(&self) -> &str {
         match self {
-            ProxyConfig::Http { host, port, username, password, .. } => {
-                let auth = if let (Some(u), Some(p)) = (username, password) {
-                    format!("{}:{}@", u, p)
-                } else if let Some(u) = username {
-                    format!("{}@", u)
-                } else {
-                    String::new()
-                };
-                Some(format!("{}://{}{}:{}",
-                    if self.is_connect() { "https" } else { "http" },
-                    auth, host, port))
-            }
-            ProxyConfig::Socks5 { host, port, username, password } => {
-                let auth = if let (Some(u), Some(p)) = (username, password) {
-                    format!("{}:{}@", u, p)
-                } else if let Some(u) = username {
-                    format!("{}@", u)
-                } else {
-                    String::new()
-                };
-                Some(format!("socks5://{}{}:{}", auth, host, port))
-            }
-            ProxyConfig::Socks4 { host, port, .. } => {
-                Some(format!("socks4://{}:{}", host, port))
-            }
-            ProxyConfig::None => None,
+            ProxyConfig::Http { host, .. } => host,
+            ProxyConfig::Socks4 { host, .. } => host,
+            ProxyConfig::Socks5 { host, .. } => host,
+            ProxyConfig::Chain { proxies } => proxies.first().map(|p| p.host()).unwrap_or(""),
+            ProxyConfig::None => "",
         }
     }
 
-    #[allow(dead_code)]
-    pub fn is_connect(&self) -> bool {
-        matches!(self, ProxyConfig::Http { connect: true, .. })
+    pub fn port(&self) -> u16 {
+        match self {
+            ProxyConfig::Http { port, .. } => *port,
+            ProxyConfig::Socks4 { port, .. } => *port,
+            ProxyConfig::Socks5 { port, .. } => *port,
+            ProxyConfig::Chain { proxies } => proxies.first().map(|p| p.port()).unwrap_or(0),
+            ProxyConfig::None => 0,
+        }
     }
 }
 
@@ -190,19 +183,19 @@ fn parse_auth(auth: Option<&str>) -> (Option<String>, Option<String>) {
 }
 
 impl ProxyConfig {
-    pub async fn tcp_connect(&self, addr: &str, timeout: Duration) -> Result<TcpStream, String> {
+    pub async fn tcp_connect(&self, addr: &str, timeout: Duration) -> Result<TcpStream, AttackError> {
         match self {
             ProxyConfig::None => {
                 let stream = tokio::time::timeout(timeout, TcpStream::connect(addr)).await
-                    .map_err(|_| format!("Timeout connecting to {}", addr))?
-                    .map_err(|e| format!("Failed to connect to {}: {}", addr, e))?;
+                    .map_err(|_| AttackError::internal(format!("Timeout connecting to {}", addr)))?
+                    .map_err(|e| AttackError::io("tcp_connect", e.to_string()))?;
                 return set_tcp_keepalive(stream);
             }
             ProxyConfig::Http { host, port, username, password, .. } => {
                 let proxy_addr = format!("{}:{}", host, port);
                 let stream = tokio::time::timeout(timeout, TcpStream::connect(&proxy_addr)).await
-                    .map_err(|_| format!("Timeout connecting to proxy {}", proxy_addr))?
-                    .map_err(|e| format!("Failed to connect to proxy {}: {}", proxy_addr, e))?;
+                    .map_err(|_| AttackError::internal(format!("Timeout connecting to proxy {}", proxy_addr)))?
+                    .map_err(|e| AttackError::io("tcp_connect", e.to_string()))?;
                 let mut stream = set_tcp_keepalive(stream)?;
 
                 let auth_header = if let (Some(u), Some(p)) = (username, password) {
@@ -217,16 +210,16 @@ impl ProxyConfig {
                     addr, addr, auth_header
                 );
                 stream.write_all(connect_req.as_bytes()).await
-                    .map_err(|e| format!("Failed to send CONNECT: {}", e))?;
+                    .map_err(|e| AttackError::io("proxy CONNECT send", e.to_string()))?;
                 stream.flush().await.ok();
 
                 let mut buf = vec![0u8; 4096];
                 let n = stream.read(&mut buf).await
-                    .map_err(|e| format!("Failed to read CONNECT response: {}", e))?;
+                    .map_err(|e| AttackError::io("proxy CONNECT recv", e.to_string()))?;
                 let resp = String::from_utf8_lossy(&buf[..n]);
 
                 if !resp.starts_with("HTTP/1.1 200") && !resp.starts_with("HTTP/1.0 200") {
-                    return Err(format!("Proxy CONNECT failed: {}", resp.lines().next().unwrap_or("unknown")));
+                    return Err(AttackError::internal(format!("Proxy CONNECT failed: {}", resp.lines().next().unwrap_or("unknown"))));
                 }
 
                 Ok(stream)
@@ -234,20 +227,20 @@ impl ProxyConfig {
             ProxyConfig::Socks5 { host, port, username, password } => {
                 let proxy_addr = format!("{}:{}", host, port);
                 let stream = tokio::time::timeout(timeout, TcpStream::connect(&proxy_addr)).await
-                    .map_err(|_| format!("Timeout connecting to SOCKS5 proxy {}", proxy_addr))?
-                    .map_err(|e| format!("Failed to connect to SOCKS5 proxy {}: {}", proxy_addr, e))?;
+                    .map_err(|_| AttackError::internal(format!("Timeout connecting to SOCKS5 proxy {}", proxy_addr)))?
+                    .map_err(|e| AttackError::io("tcp_connect", e.to_string()))?;
                 let mut stream = set_tcp_keepalive(stream)?;
 
                 let auth_method = if username.is_some() { 0x02 } else { 0x00 };
                 stream.write_all(&[0x05, 0x01, auth_method]).await
-                    .map_err(|e| format!("SOCKS5 greeting send: {}", e))?;
+                    .map_err(|e| AttackError::io("SOCKS5 greeting send", e.to_string()))?;
                 stream.flush().await.ok();
 
                 let mut greeting_resp = [0u8; 2];
                 stream.read_exact(&mut greeting_resp).await
-                    .map_err(|e| format!("SOCKS5 greeting recv: {}", e))?;
+                    .map_err(|e| AttackError::io("SOCKS5 greeting recv", e.to_string()))?;
                 if greeting_resp[0] != 0x05 {
-                    return Err("SOCKS5: invalid version".into());
+                    return Err(AttackError::internal("SOCKS5: invalid version"));
                 }
                 if greeting_resp[1] == 0x02 {
                     let u = username.as_deref().unwrap_or("");
@@ -257,35 +250,35 @@ impl ProxyConfig {
                     auth.push(p.len() as u8);
                     auth.extend_from_slice(p.as_bytes());
                     stream.write_all(&auth).await
-                        .map_err(|e| format!("SOCKS5 auth send: {}", e))?;
+                        .map_err(|e| AttackError::io("SOCKS5 auth send", e.to_string()))?;
                     stream.flush().await.ok();
 
                     let mut auth_resp = [0u8; 2];
                     stream.read_exact(&mut auth_resp).await
-                        .map_err(|e| format!("SOCKS5 auth recv: {}", e))?;
+                        .map_err(|e| AttackError::io("SOCKS5 auth recv", e.to_string()))?;
                     if auth_resp[1] != 0x00 {
-                        return Err("SOCKS5: authentication failed".into());
+                        return Err(AttackError::internal("SOCKS5: authentication failed"));
                     }
                 } else if greeting_resp[1] != 0x00 {
-                    return Err("SOCKS5: no acceptable auth method".into());
+                    return Err(AttackError::internal("SOCKS5: no acceptable auth method"));
                 }
 
                 let (host_part, port_part) = addr.rsplit_once(':')
-                    .ok_or_else(|| format!("Invalid address format: {}", addr))?;
+                    .ok_or_else(|| AttackError::internal(format!("Invalid address format: {}", addr)))?;
                 let port_num: u16 = port_part.parse()
-                    .map_err(|_| format!("Invalid port: {}", port_part))?;
+                    .map_err(|_| AttackError::internal(format!("Invalid port: {}", port_part)))?;
 
                 let mut req = vec![0x05, 0x01, 0x00, 0x03, host_part.len() as u8];
                 req.extend_from_slice(host_part.as_bytes());
                 req.extend_from_slice(&port_num.to_be_bytes());
 
                 stream.write_all(&req).await
-                    .map_err(|e| format!("SOCKS5 connect send: {}", e))?;
+                    .map_err(|e| AttackError::io("SOCKS5 connect send", e.to_string()))?;
                 stream.flush().await.ok();
 
                 let mut connect_resp = [0u8; 4];
                 stream.read_exact(&mut connect_resp).await
-                    .map_err(|e| format!("SOCKS5 connect recv: {}", e))?;
+                    .map_err(|e| AttackError::io("SOCKS5 connect recv", e.to_string()))?;
                 if connect_resp[1] != 0x00 {
                     let err_msg = match connect_resp[1] {
                         0x01 => "general SOCKS server failure",
@@ -298,7 +291,7 @@ impl ProxyConfig {
                         0x08 => "address type not supported",
                         _ => "unknown SOCKS error",
                     };
-                    return Err(format!("SOCKS5: {}", err_msg));
+                    return Err(AttackError::internal(format!("SOCKS5: {}", err_msg)));
                 }
 
                 let bnd_type = connect_resp[3];
@@ -316,14 +309,14 @@ impl ProxyConfig {
             ProxyConfig::Socks4 { host, port, username } => {
                 let proxy_addr = format!("{}:{}", host, port);
                 let stream = tokio::time::timeout(timeout, TcpStream::connect(&proxy_addr)).await
-                    .map_err(|_| format!("Timeout connecting to SOCKS4 proxy {}", proxy_addr))?
-                    .map_err(|e| format!("Failed to connect to SOCKS4 proxy {}: {}", proxy_addr, e))?;
+                    .map_err(|_| AttackError::internal(format!("Timeout connecting to SOCKS4 proxy {}", proxy_addr)))?
+                    .map_err(|e| AttackError::io("tcp_connect", e.to_string()))?;
                 let mut stream = set_tcp_keepalive(stream)?;
 
                 let (host_part, port_part) = addr.rsplit_once(':')
-                    .ok_or_else(|| format!("Invalid address format: {}", addr))?;
+                    .ok_or_else(|| AttackError::internal(format!("Invalid address format: {}", addr)))?;
                 let port_num: u16 = port_part.parse()
-                    .map_err(|_| format!("Invalid port: {}", port_part))?;
+                    .map_err(|_| AttackError::internal(format!("Invalid port: {}", port_part)))?;
                 let ip_parts: Vec<&str> = host_part.split('.').collect();
                 let user_id = username.as_deref().unwrap_or("");
 
@@ -348,14 +341,14 @@ impl ProxyConfig {
                 }
 
                 stream.write_all(&req).await
-                    .map_err(|e| format!("SOCKS4 connect send: {}", e))?;
+                    .map_err(|e| AttackError::io("SOCKS4 connect send", e.to_string()))?;
                 stream.flush().await.ok();
 
                 let mut resp = [0u8; 8];
                 stream.read_exact(&mut resp).await
-                    .map_err(|e| format!("SOCKS4 connect recv: {}", e))?;
+                    .map_err(|e| AttackError::io("SOCKS4 connect recv", e.to_string()))?;
                 if resp[0] != 0x00 {
-                    return Err("SOCKS4: invalid null byte".into());
+                    return Err(AttackError::internal("SOCKS4: invalid null byte"));
                 }
                 if resp[1] != 0x5a {
                     let err_msg = match resp[1] {
@@ -364,12 +357,142 @@ impl ProxyConfig {
                         0x5d => "identd username mismatch",
                         _ => "unknown SOCKS4 error",
                     };
-                    return Err(format!("SOCKS4: {}", err_msg));
+                    return Err(AttackError::internal(format!("SOCKS4: {}", err_msg)));
                 }
 
                 Ok(stream)
             }
+            ProxyConfig::Chain { proxies } => {
+                if proxies.is_empty() {
+                    return Err(AttackError::internal("Empty proxy chain"));
+                }
+
+                let proxies = proxies.clone();
+                let first = &proxies[0];
+                let first_addr = format!("{}:{}", first.host(), first.port());
+                let stream = tokio::time::timeout(timeout, TcpStream::connect(&first_addr)).await
+                    .map_err(|_| AttackError::internal(format!("Timeout connecting to chain proxy {}", first_addr)))?
+                    .map_err(|e| AttackError::io("tcp_connect", e.to_string()))?;
+                let mut stream = set_tcp_keepalive(stream)?;
+
+                let mut current_proxy = first;
+                for next in &proxies[1..] {
+                    let next_addr = format!("{}:{}", next.host(), next.port());
+                    stream = tunnel_through(stream, current_proxy, &next_addr, timeout).await?;
+                    current_proxy = next;
+                }
+                stream = tunnel_through(stream, current_proxy, addr, timeout).await?;
+                Ok(stream)
+            }
         }
+    }
+}
+
+async fn tunnel_through(
+    mut stream: TcpStream,
+    proxy: &ProxyConfig,
+    target: &str,
+    _timeout: Duration,
+) -> Result<TcpStream, AttackError> {
+    match proxy {
+        ProxyConfig::Http { host: _, port: _, username, password, .. } => {
+            let auth_header = if let (Some(u), Some(p)) = (username, password) {
+                let creds = base64_encode(&format!("{}:{}", u, p));
+                format!("Proxy-Authorization: Basic {}\r\n", creds)
+            } else {
+                String::new()
+            };
+            let connect_req = format!(
+                "CONNECT {} HTTP/1.1\r\nHost: {}\r\n{}\r\n",
+                target, target, auth_header
+            );
+            stream.write_all(connect_req.as_bytes()).await
+                .map_err(|e| AttackError::io("chain CONNECT send", e.to_string()))?;
+            stream.flush().await.ok();
+            let mut buf = vec![0u8; 4096];
+            let n = stream.read(&mut buf).await
+                .map_err(|e| AttackError::io("chain CONNECT recv", e.to_string()))?;
+            let resp = String::from_utf8_lossy(&buf[..n]);
+            if !resp.starts_with("HTTP/1.1 200") && !resp.starts_with("HTTP/1.0 200") {
+                return Err(AttackError::internal(
+                    format!("Chain CONNECT failed: {}", resp.lines().next().unwrap_or("unknown"))
+                ));
+            }
+            Ok(stream)
+        }
+        ProxyConfig::Socks5 { host: _, port: _, username, password } => {
+            let auth_method = if username.is_some() { 0x02 } else { 0x00 };
+            stream.write_all(&[0x05, 0x01, auth_method]).await
+                .map_err(|e| AttackError::io("chain SOCKS5 greet", e.to_string()))?;
+            stream.flush().await.ok();
+            let mut greeting_resp = [0u8; 2];
+            stream.read_exact(&mut greeting_resp).await
+                .map_err(|e| AttackError::io("chain SOCKS5 greet recv", e.to_string()))?;
+            if greeting_resp[1] == 0x02 {
+                let u = username.as_deref().unwrap_or("");
+                let p = password.as_deref().unwrap_or("");
+                let mut auth = vec![0x01, u.len() as u8];
+                auth.extend_from_slice(u.as_bytes());
+                auth.push(p.len() as u8);
+                auth.extend_from_slice(p.as_bytes());
+                stream.write_all(&auth).await
+                    .map_err(|e| AttackError::io("chain SOCKS5 auth", e.to_string()))?;
+                stream.flush().await.ok();
+                let mut auth_resp = [0u8; 2];
+                stream.read_exact(&mut auth_resp).await
+                    .map_err(|e| AttackError::io("chain SOCKS5 auth recv", e.to_string()))?;
+            }
+            let (host_part, port_part) = target.rsplit_once(':')
+                .ok_or_else(|| AttackError::internal("Invalid chain target"))?;
+            let port_num: u16 = port_part.parse()
+                .map_err(|_| AttackError::internal("Invalid chain port"))?;
+            let mut req = vec![0x05, 0x01, 0x00, 0x03, host_part.len() as u8];
+            req.extend_from_slice(host_part.as_bytes());
+            req.extend_from_slice(&port_num.to_be_bytes());
+            stream.write_all(&req).await
+                .map_err(|e| AttackError::io("chain SOCKS5 connect", e.to_string()))?;
+            stream.flush().await.ok();
+            let mut connect_resp = [0u8; 4];
+            stream.read_exact(&mut connect_resp).await
+                .map_err(|e| AttackError::io("chain SOCKS5 connect recv", e.to_string()))?;
+            if connect_resp[1] != 0x00 {
+                return Err(AttackError::internal("Chain SOCKS5 connection failed"));
+            }
+            let rest_len = match connect_resp[3] { 0x01 => 6, 0x03 => 3, 0x04 => 18, _ => 2 };
+            let mut rest = vec![0u8; rest_len];
+            let _ = stream.read_exact(&mut rest).await;
+            Ok(stream)
+        }
+        ProxyConfig::Socks4 { host: _, port: _, username } => {
+            let (host_part, port_part) = target.rsplit_once(':')
+                .ok_or_else(|| AttackError::internal("Invalid chain target"))?;
+            let port_num: u16 = port_part.parse()
+                .map_err(|_| AttackError::internal("Invalid chain port"))?;
+            let user_id = username.as_deref().unwrap_or("");
+            let mut req = Vec::with_capacity(9 + user_id.len());
+            req.push(0x04); req.push(0x01);
+            req.extend_from_slice(&port_num.to_be_bytes());
+            let ip_parts: Vec<&str> = host_part.split('.').collect();
+            if ip_parts.len() == 4 {
+                for p in &ip_parts { req.push(p.parse::<u8>().unwrap_or(0)); }
+            } else {
+                req.extend_from_slice(&[0, 0, 0, 1]);
+            }
+            req.extend_from_slice(user_id.as_bytes());
+            req.push(0x00);
+            if ip_parts.len() != 4 {
+                req.extend_from_slice(host_part.as_bytes());
+                req.push(0x00);
+            }
+            stream.write_all(&req).await
+                .map_err(|e| AttackError::io("chain SOCKS4 connect", e.to_string()))?;
+            stream.flush().await.ok();
+            let mut resp = [0u8; 8];
+            stream.read_exact(&mut resp).await
+                .map_err(|e| AttackError::io("chain SOCKS4 recv", e.to_string()))?;
+            Ok(stream)
+        }
+        _ => Err(AttackError::internal("Cannot chain through None proxy")),
     }
 }
 
@@ -521,14 +644,6 @@ mod tests {
     }
 }
 
-pub fn parse_proxy_chain(input: &str) -> Vec<ProxyConfig> {
-    input.split(',')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .filter_map(|s| ProxyConfig::parse(s).ok())
-        .collect()
-}
-
 pub fn load_proxy_list(path: &std::path::Path) -> Result<Vec<ProxyConfig>, AttackError> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| AttackError::io("proxy", format!("Failed to read proxy file: {}", e)))?;
@@ -547,11 +662,11 @@ pub fn load_proxy_list(path: &std::path::Path) -> Result<Vec<ProxyConfig>, Attac
     Ok(proxies)
 }
 
-fn set_tcp_keepalive(stream: TcpStream) -> Result<TcpStream, String> {
+fn set_tcp_keepalive(stream: TcpStream) -> Result<TcpStream, AttackError> {
     let std_stream = stream.into_std()
-        .map_err(|e| format!("into_std: {}", e))?;
+        .map_err(|e| AttackError::io("set_keepalive", e.to_string()))?;
     let sock_ref = socket2::SockRef::from(&std_stream);
     let _ = sock_ref.set_keepalive(true);
     TcpStream::from_std(std_stream)
-        .map_err(|e| format!("from_std: {}", e))
+        .map_err(|e| AttackError::io("set_keepalive", e.to_string()))
 }

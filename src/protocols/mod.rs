@@ -18,8 +18,8 @@ use crate::core::result::AuthResult;
 use crate::core::target::Target;
 
 #[async_trait]
-#[allow(dead_code)]
 pub trait Protocol: Send + Sync {
+    #[allow(dead_code)]
     fn name(&self) -> &'static str;
     fn default_port(&self) -> u16;
 

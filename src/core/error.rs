@@ -2,16 +2,10 @@ use std::fmt;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum AttackError {
     Config(String),
     Io { context: String, detail: String },
     Dns { host: String, detail: String },
-    Protocol { protocol: String, detail: String },
-    Auth { reason: String },
-    Lockout { user: String },
-    RateLimited,
-    Timeout { ms: u64 },
     Wordlist { path: PathBuf, detail: String },
     Session { detail: String },
     Internal { detail: String },
@@ -23,13 +17,6 @@ impl fmt::Display for AttackError {
             AttackError::Config(msg) => write!(f, "Config error: {}", msg),
             AttackError::Io { context, detail } => write!(f, "I/O error {}: {}", context, detail),
             AttackError::Dns { host, detail } => write!(f, "DNS error for {}: {}", host, detail),
-            AttackError::Protocol { protocol, detail } => {
-                write!(f, "{} protocol error: {}", protocol, detail)
-            }
-            AttackError::Auth { reason } => write!(f, "Auth error: {}", reason),
-            AttackError::Lockout { user } => write!(f, "Account locked: {}", user),
-            AttackError::RateLimited => write!(f, "Rate limited"),
-            AttackError::Timeout { ms } => write!(f, "Timeout after {}ms", ms),
             AttackError::Wordlist { path, detail } => {
                 write!(f, "Wordlist '{}': {}", path.display(), detail)
             }
@@ -56,14 +43,6 @@ impl AttackError {
     pub fn dns(host: impl Into<String>, detail: impl Into<String>) -> Self {
         AttackError::Dns {
             host: host.into(),
-            detail: detail.into(),
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn protocol(protocol: impl Into<String>, detail: impl Into<String>) -> Self {
-        AttackError::Protocol {
-            protocol: protocol.into(),
             detail: detail.into(),
         }
     }
@@ -140,12 +119,6 @@ mod tests {
     fn test_dns() {
         let e = AttackError::dns("example.com", "not found");
         assert!(e.to_string().contains("example.com"));
-    }
-
-    #[test]
-    fn test_protocol() {
-        let e = AttackError::protocol("ssh", "handshake failed");
-        assert!(e.to_string().contains("ssh"));
     }
 
     #[test]

@@ -66,18 +66,6 @@ fn ber_application(tag: u8, data: &[u8]) -> Vec<u8> {
     result
 }
 
-#[allow(dead_code)]
-fn ber_enumerated(value: i32) -> Vec<u8> {
-    let bytes = if value < 128 {
-        vec![value as u8]
-    } else {
-        vec![(value >> 8) as u8, value as u8]
-    };
-    let mut result = vec![0x0au8];
-    result.extend_from_slice(&ber_len(bytes.len()));
-    result.extend_from_slice(&bytes);
-    result
-}
 
 fn build_bind_request(dn: &str, password: &str) -> Vec<u8> {
     let auth = ber_context_tag(0, password.as_bytes());

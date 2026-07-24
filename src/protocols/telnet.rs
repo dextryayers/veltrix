@@ -39,7 +39,8 @@ impl Protocol for TelnetProtocol {
 
         match timeout(timeout_dur, async {
             let mut stream = match proxy {
-                Some(p) => p.tcp_connect(&target.addr_string(), timeout_dur).await?,
+                Some(p) => p.tcp_connect(&target.addr_string(), timeout_dur).await
+                    .map_err(|e| format!("Proxy connect: {}", e))?,
                 None => TcpStream::connect(target.addr_string()).await.map_err(|e| e.to_string())?,
             };
             let (reader, mut writer) = stream.split();

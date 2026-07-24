@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use crate::core::credential::Credential;
@@ -7,6 +8,14 @@ use crate::core::result::AuthResult;
 use crate::core::target::Target;
 use crate::proxy::ProxyConfig;
 use super::Protocol;
+
+static HTTP_USERFIELD: OnceLock<String> = OnceLock::new();
+static HTTP_PASSFIELD: OnceLock<String> = OnceLock::new();
+static HTTP_SUCCESS: OnceLock<String> = OnceLock::new();
+
+pub fn set_form_userfield(val: &str) { let _ = HTTP_USERFIELD.set(val.to_string()); }
+pub fn set_form_passfield(val: &str) { let _ = HTTP_PASSFIELD.set(val.to_string()); }
+pub fn set_form_success(val: &str) { let _ = HTTP_SUCCESS.set(val.to_string()); }
 
 fn build_client(timeout_dur: Duration, proxy: &Option<ProxyConfig>) -> Result<reqwest::Client, String> {
     let mut builder = reqwest::Client::builder()
@@ -278,10 +287,12 @@ impl HttpProtocol {
             ),
         };
 
+        let userfield = HTTP_USERFIELD.get().map(|s| s.as_str()).unwrap_or("username");
+        let passfield = HTTP_PASSFIELD.get().map(|s| s.as_str()).unwrap_or("password");
+
         let mut form = HashMap::new();
-        form.insert("username", &credential.username);
-        form.insert("password", &credential.password);
-        form.insert("login", &credential.username);
+        form.insert(userfield, &credential.username);
+        form.insert(passfield, &credential.password);
 
         match client
             .post(url)
@@ -292,10 +303,16 @@ impl HttpProtocol {
             Ok(resp) => {
                 let status = resp.status().as_u16();
                 let text = resp.text().await.unwrap_or_default().to_lowercase();
-                let has_error = text.contains("login failed")
-                    || text.contains("invalid")
-                    || text.contains("incorrect")
-                    || text.contains("error");
+                let success_str = HTTP_SUCCESS.get().map(|s| s.as_str()).unwrap_or("");
+
+                let has_error = if success_str.is_empty() {
+                    text.contains("login failed")
+                        || text.contains("invalid")
+                        || text.contains("incorrect")
+                        || text.contains("error")
+                } else {
+                    !text.contains(&success_str.to_lowercase())
+                };
 
                 let success = is_success_status(status) && !has_error;
 

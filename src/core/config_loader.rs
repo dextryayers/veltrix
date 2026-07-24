@@ -53,6 +53,10 @@ pub struct CredentialsSection {
     pub single_user: bool,
     pub spray: bool,
     pub max_password_len: Option<usize>,
+    pub rdp_domain: Option<String>,
+    pub http_userfield: Option<String>,
+    pub http_passfield: Option<String>,
+    pub http_success: Option<String>,
 }
 
 impl Default for CredentialsSection {
@@ -66,6 +70,10 @@ impl Default for CredentialsSection {
             single_user: false,
             spray: false,
             max_password_len: None,
+            rdp_domain: None,
+            http_userfield: None,
+            http_passfield: None,
+            http_success: None,
         }
     }
 }
@@ -212,6 +220,18 @@ impl ConfigFile {
         if let Some(n) = c.max_password_len {
             config.max_password_len = Some(n);
         }
+        if let Some(d) = c.rdp_domain {
+            config.rdp_domain = Some(d);
+        }
+        if let Some(v) = c.http_userfield {
+            config.http_userfield = Some(v);
+        }
+        if let Some(v) = c.http_passfield {
+            config.http_passfield = Some(v);
+        }
+        if let Some(v) = c.http_success {
+            config.http_success = Some(v);
+        }
 
         let h = self.hybrid;
         if let Some(f) = h.rules {
@@ -332,6 +352,10 @@ mod tests {
             quiet: false,
             no_banner: false,
             single_user_mode: false,
+            rdp_domain: None,
+            http_userfield: None,
+            http_passfield: None,
+            http_success: None,
             spray_mode: false,
             stop_on_first: false,
             retries: 1,
@@ -360,6 +384,10 @@ mod tests {
                 single_user: false,
                 spray: false,
                 max_password_len: None,
+                rdp_domain: None,
+                http_userfield: None,
+                http_passfield: None,
+                http_success: None,
             },
             hybrid: HybridSection { rules: None, max_mutations: None },
             performance: PerformanceSection {

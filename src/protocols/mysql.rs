@@ -64,8 +64,6 @@ fn caching_sha2_password(password: &str, salt: &[u8]) -> Vec<u8> {
 const CLIENT_PROTOCOL_41: u32 = 0x00000200;
 const CLIENT_SECURE_CONNECTION: u32 = 0x00008000;
 const CLIENT_PLUGIN_AUTH: u32 = 0x00080000;
-#[allow(dead_code)]
-const CLIENT_CONNECT_WITH_DB: u32 = 0x00000008;
 
 #[async_trait]
 impl Protocol for MySqlProtocol {

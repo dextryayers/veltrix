@@ -67,18 +67,6 @@ impl TargetSpec {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn host_count(&self) -> u64 {
-        match self {
-            TargetSpec::Single { .. } => 1,
-            TargetSpec::Cidr { prefix, .. } => {
-                if *prefix == 32 { 1 } else { 2u64.pow((32 - *prefix) as u32) - 2 }
-            }
-            TargetSpec::Range { start, end, .. } => {
-                (u32_from_ip(*end) - u32_from_ip(*start) + 1) as u64
-            }
-        }
-    }
 }
 
 fn u32_from_ip(ip: Ipv4Addr) -> u32 {

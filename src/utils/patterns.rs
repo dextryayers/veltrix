@@ -15,10 +15,8 @@ pub enum ResponseCategory {
 pub struct ClassifiedError {
     pub category: ResponseCategory,
     pub message: String,
-    #[allow(dead_code)]
-    pub retryable: bool,
-    #[allow(dead_code)]
-    pub should_backoff: bool,
+    pub _retryable: bool,
+    pub _should_backoff: bool,
     pub should_rotate_proxy: bool,
 }
 
@@ -73,8 +71,8 @@ pub fn classify_error(error: Option<&str>, success: bool) -> ClassifiedError {
         return ClassifiedError {
             category: ResponseCategory::Success,
             message: String::new(),
-            retryable: false,
-            should_backoff: false,
+            _retryable: false,
+            _should_backoff: false,
             should_rotate_proxy: false,
         };
     }
@@ -85,8 +83,8 @@ pub fn classify_error(error: Option<&str>, success: bool) -> ClassifiedError {
         return ClassifiedError {
             category: ResponseCategory::AccountLocked,
             message: msg.to_string(),
-            retryable: false,
-            should_backoff: true,
+            _retryable: false,
+            _should_backoff: true,
             should_rotate_proxy: true,
         };
     }
@@ -95,8 +93,8 @@ pub fn classify_error(error: Option<&str>, success: bool) -> ClassifiedError {
         return ClassifiedError {
             category: ResponseCategory::RateLimited,
             message: msg.to_string(),
-            retryable: true,
-            should_backoff: true,
+            _retryable: true,
+            _should_backoff: true,
             should_rotate_proxy: true,
         };
     }
@@ -105,8 +103,8 @@ pub fn classify_error(error: Option<&str>, success: bool) -> ClassifiedError {
         return ClassifiedError {
             category: ResponseCategory::AuthFailure,
             message: msg.to_string(),
-            retryable: false,
-            should_backoff: false,
+            _retryable: false,
+            _should_backoff: false,
             should_rotate_proxy: false,
         };
     }
@@ -115,8 +113,8 @@ pub fn classify_error(error: Option<&str>, success: bool) -> ClassifiedError {
         return ClassifiedError {
             category: ResponseCategory::Timeout,
             message: msg.to_string(),
-            retryable: true,
-            should_backoff: true,
+            _retryable: true,
+            _should_backoff: true,
             should_rotate_proxy: false,
         };
     }
@@ -127,8 +125,8 @@ pub fn classify_error(error: Option<&str>, success: bool) -> ClassifiedError {
         return ClassifiedError {
             category: ResponseCategory::ConnectionError,
             message: msg.to_string(),
-            retryable: true,
-            should_backoff: true,
+            _retryable: true,
+            _should_backoff: true,
             should_rotate_proxy: false,
         };
     }
@@ -136,8 +134,8 @@ pub fn classify_error(error: Option<&str>, success: bool) -> ClassifiedError {
     ClassifiedError {
         category: ResponseCategory::ProtocolError,
         message: msg.to_string(),
-        retryable: true,
-        should_backoff: false,
+        _retryable: true,
+        _should_backoff: false,
         should_rotate_proxy: false,
     }
 }
@@ -163,14 +161,14 @@ mod tests {
     fn test_classify_success() {
         let c = classify_error(None, true);
         assert_eq!(c.category, ResponseCategory::Success);
-        assert!(!c.retryable);
+        assert!(!c._retryable);
     }
 
     #[test]
     fn test_classify_auth_failure() {
         let c = classify_error(Some("Access denied"), false);
         assert_eq!(c.category, ResponseCategory::AuthFailure);
-        assert!(!c.retryable);
+        assert!(!c._retryable);
     }
 
     #[test]
@@ -190,7 +188,7 @@ mod tests {
     fn test_classify_rate_limited() {
         let c = classify_error(Some("Rate limit exceeded"), false);
         assert_eq!(c.category, ResponseCategory::RateLimited);
-        assert!(c.should_backoff);
+        assert!(c._should_backoff);
         assert!(c.should_rotate_proxy);
     }
 
@@ -198,7 +196,7 @@ mod tests {
     fn test_classify_connection_error() {
         let c = classify_error(Some("Connection refused"), false);
         assert_eq!(c.category, ResponseCategory::ConnectionError);
-        assert!(c.retryable);
+        assert!(c._retryable);
     }
 
     #[test]
@@ -232,8 +230,8 @@ mod tests {
         let c = ClassifiedError {
             category: ResponseCategory::AccountLocked,
             message: "locked".into(),
-            retryable: false,
-            should_backoff: true,
+            _retryable: false,
+            _should_backoff: true,
             should_rotate_proxy: true,
         };
         assert!(should_skip_user(&c));
@@ -244,8 +242,8 @@ mod tests {
         let c = ClassifiedError {
             category: ResponseCategory::AuthFailure,
             message: "bad pass".into(),
-            retryable: false,
-            should_backoff: false,
+            _retryable: false,
+            _should_backoff: false,
             should_rotate_proxy: false,
         };
         assert!(!should_skip_user(&c));

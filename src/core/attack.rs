@@ -15,11 +15,12 @@ use super::rules::{apply_rules, load_rules};
 use super::target::{parse_targets, Target};
 use super::wordlist::{load_combo_list, load_wordlist};
 use super::worker::{WorkerPool, WorkerTask};
-use crate::proxy::{load_proxy_list, parse_proxy_chain, ProxyConfig};
+use crate::proxy::{load_proxy_list, ProxyConfig};
 use crate::utils::output::OutputHandler;
 use crate::utils::patterns::{classify_error, ResponseCategory};
 use crate::utils::ratelimit::{JitterDelay, RateLimiter};
 use crate::utils::report::save_html_report;
+use crate::protocols::{http, rdp};
 use crate::utils::resume::SessionState;
 
 pub struct AttackOrchestrator {
@@ -61,6 +62,19 @@ impl AttackOrchestrator {
         } else {
             None
         };
+
+        if let Some(ref domain) = config.rdp_domain {
+            rdp::set_domain(domain);
+        }
+        if let Some(ref v) = config.http_userfield {
+            http::set_form_userfield(v);
+        }
+        if let Some(ref v) = config.http_passfield {
+            http::set_form_passfield(v);
+        }
+        if let Some(ref v) = config.http_success {
+            http::set_form_success(v);
+        }
 
         let rate_limiter = RateLimiter::new(config.rate_limit);
         let jitter = JitterDelay::new(config.delay, 100);
@@ -215,8 +229,16 @@ impl AttackOrchestrator {
             }
         }
         if let Some(ref chain) = config.proxy_chain {
-            let chain_proxies = parse_proxy_chain(chain);
-            proxies.extend(chain_proxies);
+            let chain_proxies: Vec<ProxyConfig> = chain.split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .filter_map(|s| ProxyConfig::parse(s).ok())
+                .collect();
+            if chain_proxies.len() > 1 {
+                proxies.push(ProxyConfig::Chain { proxies: chain_proxies });
+            } else if let Some(p) = chain_proxies.into_iter().next() {
+                proxies.push(p);
+            }
         }
         proxies
     }

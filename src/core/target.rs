@@ -2,7 +2,6 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
 use std::time::Duration;
 use serde::{Deserialize, Serialize};
-use colored::Colorize;
 use super::error::AttackError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,11 +20,6 @@ impl Target {
             protocol: protocol.to_string(),
             address: None,
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn display(&self) -> String {
-        format!("{}:{} [{}]", self.host.cyan(), self.port.to_string().yellow(), self.protocol.green())
     }
 
     pub async fn resolve(&mut self, timeout: Duration) -> Result<(), AttackError> {
