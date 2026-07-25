@@ -4,6 +4,7 @@ mod core;
 mod distributed;
 mod protocols;
 mod proxy;
+mod scanner;
 mod utils;
 
 use std::io::Write;
@@ -101,6 +102,84 @@ async fn main() {
         if ml_generate_count.is_some() || ml_score_path.is_some() {
             return;
         }
+    }
+
+    // Handle port scan mode
+    if args.scan {
+        let running = Arc::new(AtomicBool::new(true));
+        let r = running.clone();
+        ctrlc::set_handler(move || {
+            r.store(false, Ordering::SeqCst);
+        }).expect("Failed to set SIGINT handler");
+
+        let hosts = if !args.targets.is_empty() {
+            args.targets.clone()
+        } else if let Some(ref file) = args.target_file {
+            std::fs::read_to_string(file)
+                .unwrap_or_else(|e| {
+                    eprintln!("Failed to read target file: {}", e);
+                    std::process::exit(1);
+                })
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect()
+        } else {
+            eprintln!("No targets specified. Use -t or --target-file.");
+            std::process::exit(1);
+        };
+
+        let ports = match args.scan_ports.as_deref() {
+            Some("common") | None => crate::scanner::scanner::common_ports(),
+            Some(spec) => match crate::scanner::scanner::parse_port_spec(spec) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("Invalid port specification: {}", e);
+                    std::process::exit(1);
+                }
+            },
+        };
+
+        let config = crate::scanner::scanner::ScanConfig {
+            hosts,
+            ports,
+            timeout_secs: args.scan_timeout,
+            max_concurrent: args.scan_rate,
+            max_rate: 1000,
+            banner_grab: !args.scan_no_banner,
+            retries: 1,
+        };
+
+        let scanner = crate::scanner::Scanner::new(config, running.clone());
+        let results = scanner.scan().await;
+
+        let open: Vec<_> = results.iter().filter(|r| r.open).collect();
+        println!("\n┌─────────────────────────────────────────────────────────────┐");
+        println!("│ Scan Results: {} host(s), {} open ports                     │", results.len(), open.len());
+        println!("└─────────────────────────────────────────────────────────────┘");
+        for r in &results {
+            if r.open {
+                let service_info = match (&r.product, &r.version) {
+                    (Some(p), Some(v)) => format!("{} {}", p, v),
+                    (Some(p), None) => p.clone(),
+                    (None, None) if !r.banner.is_some() => r.service.clone(),
+                    _ => r.service.clone(),
+                };
+                println!(
+                    "  {:21} {}/open  {:12}  {:35}  {}ms",
+                    r.host,
+                    r.port,
+                    r.service,
+                    r.banner.as_deref().unwrap_or(&service_info).trim(),
+                    r.latency_ms,
+                );
+            }
+        }
+        if open.is_empty() {
+            println!("  (no open ports found)");
+        }
+        println!();
+        return;
     }
 
     if args.should_show_banner() {

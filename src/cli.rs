@@ -223,6 +223,22 @@ pub struct CliArgs {
     #[arg(long = "ml-output", help = "Output file for generated passwords", value_name = "FILE")]
     pub ml_output: Option<PathBuf>,
 
+    // ── Port Scanner Options ──
+    #[arg(long = "scan", help = "Run port scan mode on target hosts")]
+    pub scan: bool,
+
+    #[arg(long = "scan-ports", help = "Ports to scan: '22,80,443', '1-1000', or 'common' (default: common top 150)", value_name = "PORTS")]
+    pub scan_ports: Option<String>,
+
+    #[arg(long = "scan-timeout", help = "Per-port timeout in seconds (default: 5)", default_value = "5", value_name = "SEC")]
+    pub scan_timeout: u64,
+
+    #[arg(long = "scan-rate", help = "Max concurrent scans (default: 100)", default_value = "100", value_name = "N")]
+    pub scan_rate: usize,
+
+    #[arg(long = "scan-no-banner", help = "Disable banner grabbing")]
+    pub scan_no_banner: bool,
+
     // ── Behavior Options ──
     #[arg(long = "stop-on-first", help = "Stop after first success per target")]
     pub stop_on_first: bool,
