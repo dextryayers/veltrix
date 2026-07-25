@@ -11,8 +11,10 @@ use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use clap::Parser;
-use cli::{print_banner, print_protocols, Cli};
+use cli::{print_banner, print_protocols, Cli, Commands, ProtocolArgs, CreateArgs};
 use core::attack::AttackOrchestrator;
+use crate::utils::wordlist_gen::{WordlistConfig, generate_wordlist};
+use colored::Colorize;
 
 #[tokio::main]
 async fn main() {
@@ -145,7 +147,6 @@ async fn main() {
         }
     }
 
-    // No mode flags triggered — run attack
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
     ctrlc::set_handler(move || {
@@ -158,11 +159,101 @@ async fn main() {
         }
     }).expect("Failed to set SIGINT handler");
 
-    run_attack(&cli, running).await;
+    match cli.command {
+        Commands::ScanPorts(ref args) => run_scan(&cli, args, running).await,
+        Commands::Ssh(ref a) => run_attack(&cli, "ssh", a, running).await,
+        Commands::Ftp(ref a) => run_attack(&cli, "ftp", a, running).await,
+        Commands::Telnet(ref a) => run_attack(&cli, "telnet", a, running).await,
+        Commands::Smtp(ref a) => run_attack(&cli, "smtp", a, running).await,
+        Commands::Pop3(ref a) => run_attack(&cli, "pop3", a, running).await,
+        Commands::Imap(ref a) => run_attack(&cli, "imap", a, running).await,
+        Commands::Rdp(ref a) => run_attack(&cli, "rdp", a, running).await,
+        Commands::Mysql(ref a) => run_attack(&cli, "mysql", a, running).await,
+        Commands::Postgres(ref a) => run_attack(&cli, "postgres", a, running).await,
+        Commands::Ldap(ref a) => run_attack(&cli, "ldap", a, running).await,
+        Commands::Redis(ref a) => run_attack(&cli, "redis", a, running).await,
+        Commands::Http(ref a) => run_attack(&cli, "http", a, running).await,
+        Commands::Vnc(ref a) => run_attack(&cli, "vnc", a, running).await,
+        Commands::Mongodb(ref a) => run_attack(&cli, "mongodb", a, running).await,
+        Commands::Mssql(ref a) => run_attack(&cli, "mssql", a, running).await,
+        Commands::Smb(ref a) => run_attack(&cli, "smb", a, running).await,
+        Commands::Snmp(ref a) => run_attack(&cli, "snmp", a, running).await,
+        Commands::Create(ref a) => run_create(a).await,
+    }
 }
 
-async fn run_attack(cli: &Cli, running: Arc<AtomicBool>) {
+async fn run_scan(cli: &Cli, args: &cli::ScanPortsArgs, running: Arc<AtomicBool>) {
     print_banner();
+
+    let hosts = if !cli.targets.is_empty() {
+        cli.targets.clone()
+    } else if let Some(ref file) = cli.target_file {
+        std::fs::read_to_string(file)
+            .unwrap_or_else(|e| {
+                eprintln!("Failed to read target file: {}", e);
+                std::process::exit(1);
+            })
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect()
+    } else {
+        eprintln!("No targets specified. Use -t or --list.");
+        std::process::exit(1);
+    };
+
+    let ports = match args.port_spec.as_deref() {
+        Some("common") | None => crate::scanner::scanner::common_ports(),
+        Some(spec) => match crate::scanner::scanner::parse_port_spec(spec) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("Invalid port specification: {}", e);
+                std::process::exit(1);
+            }
+        },
+    };
+
+    let config = crate::scanner::scanner::ScanConfig {
+        hosts,
+        ports,
+        timeout_secs: args.scan_timeout,
+        max_concurrent: args.scan_rate,
+        banner_grab: !args.no_banner,
+        retries: 0,
+        show_progress: true,
+    };
+
+    let scanner = crate::scanner::Scanner::new(config, running.clone());
+    let results = scanner.scan().await;
+
+    crate::scanner::print_scan_results(&results);
+
+    if let Some(ref path) = cli.output {
+        let mut file = std::fs::File::create(path)
+            .unwrap_or_else(|e| { eprintln!("Failed to create output file: {}", e); std::process::exit(1); });
+        let open_count = results.iter().filter(|r| r.open).count();
+        writeln!(file, "Veltrix Scan Results - {} hosts, {} open ports", results.len(), open_count).ok();
+        for r in &results {
+            if r.open {
+                writeln!(file, "{}\t{}\t{}\t{:?}\t{:?}\t{}ms",
+                    r.host, r.port, r.service, r.product, r.version, r.latency_ms).ok();
+            }
+        }
+        log::info!("Scan results saved to {}", path.display());
+    }
+
+    let open_ports: Vec<_> = results.iter().filter(|r| r.open).collect();
+    if open_ports.is_empty() {
+        std::process::exit(1);
+    } else {
+        std::process::exit(0);
+    }
+}
+
+async fn run_attack(cli: &Cli, protocol: &str, args: &ProtocolArgs, running: Arc<AtomicBool>) {
+    if cli.should_show_banner() {
+        print_banner();
+    }
 
     let encrypt_passphrase = if cli.encrypt {
         match cli.encrypt_passphrase.as_deref() {
@@ -200,24 +291,7 @@ async fn run_attack(cli: &Cli, running: Arc<AtomicBool>) {
         }
     }
 
-    let mut config = cli.build_attack_config();
-
-    // Detect protocol(s) from port(s)
-    let protocols: Vec<String> = if config.ports.is_empty() {
-        vec!["ssh".to_string()]
-    } else {
-        config.ports.iter()
-            .filter_map(|p| cli::port_to_protocol(*p))
-            .map(String::from)
-            .collect()
-    };
-
-    if protocols.is_empty() {
-        eprintln!("Unknown port(s). Cannot determine protocol.");
-        std::process::exit(1);
-    }
-
-    config.protocols = protocols;
+    let config = cli.build_attack_config(protocol, args);
 
     let mut orchestrator = match AttackOrchestrator::new(config, running).await {
         Ok(o) => o,
@@ -258,6 +332,36 @@ fn encrypt_output_file(output_file: &Option<std::path::PathBuf>, passphrase: &st
                 }
                 Err(e) => log::error!("Encryption failed: {}", e),
             }
+        }
+    }
+}
+
+async fn run_create(args: &CreateArgs) {
+    let cfg = WordlistConfig {
+        name: args.name.clone(),
+        company: args.company.clone(),
+        dob: args.dob.clone(),
+        keywords: args.keywords.clone(),
+        min_len: args.min_len,
+        max_len: args.max_len,
+        leet: !args.no_leet,
+    };
+    let words = generate_wordlist(&cfg);
+    match args.output {
+        Some(ref path) => {
+            let content = words.iter().cloned().collect::<Vec<_>>().join("\n");
+            std::fs::write(path, &content).unwrap_or_else(|e| {
+                eprintln!("Failed to write wordlist: {}", e);
+                std::process::exit(1);
+            });
+            println!("  {} Generated {} candidates -> {}",
+                "✓".green(), words.len(), path.display());
+        }
+        None => {
+            for w in &words {
+                println!("{}", w);
+            }
+            eprintln!("[+] Generated {} candidates", words.len());
         }
     }
 }

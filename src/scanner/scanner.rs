@@ -1,12 +1,15 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
+use std::io::{Write, stdout};
 use tokio::net::TcpStream;
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
+use colored::Colorize;
 
 use super::{ScanResult, BannerGrabber, ServiceDb};
+
+const SPINNER: &[&str] = &["◐", "◓", "◑", "◒"];
 
 #[derive(Debug, Clone)]
 pub struct ScanConfig {
@@ -14,9 +17,9 @@ pub struct ScanConfig {
     pub ports: Vec<u16>,
     pub timeout_secs: u64,
     pub max_concurrent: usize,
-    pub max_rate: u64,
     pub banner_grab: bool,
     pub retries: u32,
+    pub show_progress: bool,
 }
 
 impl Default for ScanConfig {
@@ -26,9 +29,9 @@ impl Default for ScanConfig {
             ports: Vec::new(),
             timeout_secs: 5,
             max_concurrent: 100,
-            max_rate: 1000,
             banner_grab: true,
             retries: 1,
+            show_progress: true,
         }
     }
 }
@@ -52,16 +55,21 @@ impl Scanner {
         let total_tasks = self.config.hosts.len() * self.config.ports.len();
         let completed = Arc::new(AtomicUsize::new(0));
         let semaphore = Arc::new(Semaphore::new(self.config.max_concurrent));
+        let start_time = Instant::now();
 
-        let mut results = Vec::new();
+        if self.config.show_progress && total_tasks > 1 {
+            println!(
+                "  {} Scanning {} host(s), {} port(s) ({} probes)",
+                "▶".cyan(),
+                self.config.hosts.len(),
+                self.config.ports.len(),
+                total_tasks
+            );
+        }
+
+        let mut handles = Vec::with_capacity(total_tasks);
 
         for host in &self.config.hosts {
-            if !self.running.load(Ordering::SeqCst) {
-                break;
-            }
-
-            let mut handles = Vec::with_capacity(self.config.ports.len());
-
             for &port in &self.config.ports {
                 if !self.running.load(Ordering::SeqCst) {
                     break;
@@ -78,24 +86,51 @@ impl Scanner {
                 let config = self.config.clone();
                 let completed = completed.clone();
                 let total = total_tasks;
+                let show_progress = self.config.show_progress;
+                let start = start_time;
 
                 handles.push(tokio::spawn(async move {
                     let _permit = permit;
                     let result = scan_port(&host, port, &config, &service_db, running).await;
-                    let prev = completed.fetch_add(1, Ordering::SeqCst);
-                    if prev > 0 && prev % 100 == 0 {
-                        log::info!("Scan progress: {}/{} ports checked", prev, total);
+                    let prev = completed.fetch_add(1, Ordering::SeqCst) + 1;
+                    if show_progress && total > 0 {
+                        let pct = prev * 100 / total;
+                        let elapsed = start.elapsed();
+                        let spin = SPINNER[(prev as usize) % SPINNER.len()];
+                        let mut out = stdout().lock();
+                        let _ = write!(out,
+                            "\r  {} {}%  [{}/{}]  {}.{:02}s",
+                            spin.cyan(),
+                            pct,
+                            prev,
+                            total,
+                            elapsed.as_secs(),
+                            elapsed.subsec_millis() / 10
+                        );
+                        let _ = out.flush();
                     }
                     result
                 }));
             }
+        }
 
-            for handle in handles {
-                match handle.await {
-                    Ok(Some(r)) => results.push(r),
-                    _ => {}
-                }
+        let mut results = Vec::with_capacity(total_tasks / 10);
+        for handle in handles {
+            match handle.await {
+                Ok(Some(r)) => results.push(r),
+                _ => {}
             }
+        }
+
+        if self.config.show_progress && total_tasks > 1 {
+            let elapsed = start_time.elapsed();
+            println!();
+            println!(
+                "  {} Scan completed in {}.{:02}s",
+                "✓".green(),
+                elapsed.as_secs(),
+                elapsed.subsec_millis() / 10
+            );
         }
 
         results
@@ -134,17 +169,18 @@ async fn scan_port(
         .await
         {
             Ok(Ok(mut stream)) => {
+                let _ = stream.set_nodelay(true);
                 let latency_ms = start.elapsed().as_millis() as u64;
 
                 let service = service_db.lookup(port);
                 let (product, version, banner) = if config.banner_grab {
-                    let result = BannerGrabber::grab(
+                    match BannerGrabber::grab(
                         &mut stream,
                         port,
                         Duration::from_secs(config.timeout_secs),
                     )
-                    .await;
-                    match result {
+                    .await
+                    {
                         Ok(b) => {
                             let (prod, ver) = if b.is_empty() {
                                 (None, None)
@@ -170,15 +206,18 @@ async fn scan_port(
                     latency_ms,
                 });
             }
-            Ok(Err(ref e)) => {
+            Ok(Err(e)) => {
+                let err_str = e.to_string();
                 if attempt < max_retries {
-                    let err_str = e.to_string();
                     if err_str.contains("refused")
                         || err_str.contains("reset")
                         || err_str.contains("broken pipe")
                     {
                         return None;
                     }
+                }
+                if attempt == max_retries {
+                    log::debug!("Port {}/{} connection failed: {}", host, port, err_str);
                 }
             }
             Err(_) => {

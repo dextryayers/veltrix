@@ -97,7 +97,12 @@ impl ServiceDb {
                 if lower.contains("filezilla") {
                     return Some(("FileZilla".to_string(), None));
                 }
-                if lower.contains("microsoft ftp") || lower.contains("microsoft-ftp") {
+                if lower.contains("microsoft ftp") || lower.contains("microsoft-ftp") || lower.contains("msftp") {
+                    if let Ok(re) = Regex::new(r"Microsoft[\s-]FTP[\s/]+([\d.]+)") {
+                        if let Some(c) = re.captures(banner) {
+                            return Some(("IIS FTP".to_string(), c.get(1).map(|m| m.as_str().to_string())));
+                        }
+                    }
                     return Some(("IIS FTP".to_string(), None));
                 }
                 if lower.contains("220") && (lower.contains("ftp") || banner.contains("FTP")) {
@@ -127,11 +132,85 @@ impl ServiceDb {
                         if lower.contains("libssh") {
                             return Some(("libSSH".to_string(), Some(proto_ver)));
                         }
+                        if lower.contains("tectia") {
+                            return Some(("Tectia SSH".to_string(), Some(proto_ver)));
+                        }
                         return Some(("SSH".to_string(), Some(proto_ver)));
                     }
                 }
             }
-            80 | 443 | 8080 | 8443 | 8000 | 8008 | 8009 => {
+            23 => {
+                for line in banner.lines() {
+                    let l = line.trim();
+                    if !l.is_empty() {
+                        let words: Vec<&str> = l.split_whitespace().collect();
+                        if words.len() >= 1 {
+                            let first = words[0].trim_end_matches(':');
+                            if !first.contains("login") && !first.contains("password")
+                                && !first.contains("user") && !first.contains("pass")
+                            {
+                                if first.len() >= 3 && first.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.') {
+                                    return Some((format!("telnet ({})", first), None));
+                                }
+                            }
+                        }
+                    }
+                }
+                if lower.contains("telnet") || lower.contains("telnetd") {
+                    return Some(("Telnet".to_string(), None));
+                }
+                if lower.contains("linux") {
+                    return Some(("Telnet (Linux)".to_string(), None));
+                }
+                if lower.contains("unix") {
+                    return Some(("Telnet (Unix)".to_string(), None));
+                }
+                if lower.contains("windows") {
+                    return Some(("Telnet (Windows)".to_string(), None));
+                }
+            }
+            25 | 587 | 465 => {
+                if lower.contains("postfix") {
+                    if let Ok(re) = Regex::new(r"Postfix[\s/]+([\d.]+)") {
+                        if let Some(c) = re.captures(banner) {
+                            return Some(("Postfix".to_string(), c.get(1).map(|m| m.as_str().to_string())));
+                        }
+                    }
+                    return Some(("Postfix".to_string(), None));
+                }
+                if lower.contains("exim") {
+                    if let Ok(re) = Regex::new(r"Exim\s+([\d.]+)") {
+                        if let Some(c) = re.captures(banner) {
+                            return Some(("Exim".to_string(), c.get(1).map(|m| m.as_str().to_string())));
+                        }
+                    }
+                    return Some(("Exim".to_string(), None));
+                }
+                if lower.contains("sendmail") {
+                    if let Ok(re) = Regex::new(r"Sendmail\s+([\d.]+)") {
+                        if let Some(c) = re.captures(banner) {
+                            return Some(("Sendmail".to_string(), c.get(1).map(|m| m.as_str().to_string())));
+                        }
+                    }
+                    return Some(("Sendmail".to_string(), None));
+                }
+                if lower.contains("microsoft") || lower.contains("exchange") {
+                    return Some(("Microsoft Exchange".to_string(), None));
+                }
+                if lower.contains("qmail") {
+                    return Some(("qmail".to_string(), None));
+                }
+                if lower.contains("esmtp") || lower.contains("smtp") {
+                    if let Ok(re) = Regex::new(r"ESMTP\s+(?:[^\s]+\s+)?\(?([\w.]+)") {
+                        if let Some(c) = re.captures(banner) {
+                            let ver = c.get(1).map(|m| m.as_str().to_string());
+                            return Some(("SMTP".to_string(), ver));
+                        }
+                    }
+                    return Some(("SMTP".to_string(), None));
+                }
+            }
+            80 | 443 | 8080 | 8443 | 8000 | 8008 | 8009 | 8001 | 8002 | 8003 | 8004 | 8005 | 8006 | 8007 | 8010 | 8888 | 9443 | 18080 | 16080 | 35000 | 35001 => {
                 for line in banner.lines() {
                     if line.to_lowercase().starts_with("server:") {
                         let val = line[7..].trim();
@@ -195,6 +274,25 @@ impl ServiceDb {
                         if val.to_lowercase().contains("express") {
                             return Some(("Express".to_string(), None));
                         }
+                        if val.to_lowercase().contains("kestrel") {
+                            if let Ok(re) = Regex::new(r"Kestrel[/\s]+([\d.]+)") {
+                                if let Some(c) = re.captures(val) {
+                                    return Some(("Kestrel".to_string(), c.get(1).map(|m| m.as_str().to_string())));
+                                }
+                            }
+                            return Some(("Kestrel".to_string(), None));
+                        }
+                        if val.to_lowercase().contains("jetty") {
+                            if let Ok(re) = Regex::new(r"Jetty[/]([\d.]+)") {
+                                if let Some(c) = re.captures(val) {
+                                    return Some(("Jetty".to_string(), c.get(1).map(|m| m.as_str().to_string())));
+                                }
+                            }
+                            return Some(("Jetty".to_string(), None));
+                        }
+                        if val.to_lowercase().contains("python") {
+                            return Some(("Python".to_string(), None));
+                        }
                         let val_lower = val.to_lowercase();
                         if !val_lower.contains("server:") && !val.is_empty() {
                             return Some((val.to_string(), None));
@@ -204,6 +302,39 @@ impl ServiceDb {
                 if lower.contains("<html") || lower.contains("<!doctype") || lower.contains("<head") {
                     return Some(("HTTP".to_string(), None));
                 }
+                if let Ok(re) = Regex::new(r"HTTP/1\.[01] \d+") {
+                    if re.is_match(banner) {
+                        return Some(("HTTP".to_string(), None));
+                    }
+                }
+            }
+            110 | 995 => {
+                if lower.contains("dovecot") {
+                    return Some(("Dovecot POP3".to_string(), None));
+                }
+                if lower.contains("courier") {
+                    return Some(("Courier POP3".to_string(), None));
+                }
+                if lower.contains("cyrus") {
+                    return Some(("Cyrus POP3".to_string(), None));
+                }
+                if lower.contains("+ok") {
+                    return Some(("POP3".to_string(), None));
+                }
+            }
+            143 | 993 => {
+                if lower.contains("dovecot") {
+                    return Some(("Dovecot IMAP".to_string(), None));
+                }
+                if lower.contains("courier") {
+                    return Some(("Courier IMAP".to_string(), None));
+                }
+                if lower.contains("cyrus") {
+                    return Some(("Cyrus IMAP".to_string(), None));
+                }
+                if lower.contains("* ok") {
+                    return Some(("IMAP".to_string(), None));
+                }
             }
             3306 => {
                 if lower.contains("mariadb") {
@@ -212,14 +343,33 @@ impl ServiceDb {
                             return Some(("MariaDB".to_string(), c.get(1).map(|m| m.as_str().to_string())));
                         }
                     }
+                    if let Ok(re) = Regex::new(r"(\d+\.\d+\.\d+)") {
+                        if let Some(c) = re.captures(banner) {
+                            let v = c.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                            if v.starts_with("5.") || v.starts_with("10.") || v.starts_with("11.") {
+                                return Some(("MariaDB".to_string(), Some(v)));
+                            }
+                        }
+                    }
                     return Some(("MariaDB".to_string(), None));
                 }
-                if lower.contains("mysql") || lower.contains("native_password") {
-                    if let Ok(re) = Regex::new(r"([\d.]+)\s*mysql") {
+                if lower.contains("mysql") || lower.contains("native_password") || lower.contains("caching_sha2") {
+                    if let Ok(re) = Regex::new(r"(\d+\.\d+\.\d+)\s*mysql") {
                         if let Some(c) = re.captures(banner) {
                             return Some(("MySQL".to_string(), c.get(1).map(|m| m.as_str().to_string())));
                         }
                     }
+                    if let Ok(re) = Regex::new(r"(\d+\.\d+\.\d+)") {
+                        if let Some(c) = re.captures(banner) {
+                            let v = c.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                            if v.starts_with("8.") || v.starts_with("5.") || v.starts_with("9.") {
+                                return Some(("MySQL".to_string(), Some(v)));
+                            }
+                        }
+                    }
+                    return Some(("MySQL".to_string(), None));
+                }
+                if lower.chars().filter(|c| *c == '\0').count() > 10 {
                     return Some(("MySQL".to_string(), None));
                 }
             }
@@ -229,7 +379,12 @@ impl ServiceDb {
                         return Some(("Redis".to_string(), c.get(1).map(|m| m.as_str().to_string())));
                     }
                 }
-                if lower.contains("redis") || lower.contains("+ok") || lower.contains("-no") {
+                if let Ok(re) = Regex::new(r"redis_version:([\d.]+)") {
+                    if let Some(c) = re.captures(banner) {
+                        return Some(("Redis".to_string(), c.get(1).map(|m| m.as_str().to_string())));
+                    }
+                }
+                if lower.contains("redis") || lower.contains("+ok") || lower.contains("-no") || lower.contains("-err") {
                     return Some(("Redis".to_string(), None));
                 }
             }
@@ -244,14 +399,23 @@ impl ServiceDb {
                         return Some(("PostgreSQL".to_string(), None));
                     }
                 }
+                if lower.len() > 10 && lower.as_bytes()[0] == 0 {
+                    return Some(("PostgreSQL".to_string(), None));
+                }
             }
             27017 | 27018 => {
                 if lower.contains("mongodb") {
-                    if let Ok(re) = Regex::new(r"([\d.]+)") {
+                    if let Ok(re) = Regex::new(r"(\d+\.\d+\.\d+)") {
                         if let Some(c) = re.captures(banner) {
-                            return Some(("MongoDB".to_string(), c.get(1).map(|m| m.as_str().to_string())));
+                            let v = c.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                            if v.starts_with("2.") || v.starts_with("3.") || v.starts_with("4.") || v.starts_with("5.") || v.starts_with("6.") || v.starts_with("7.") || v.starts_with("8.") {
+                                return Some(("MongoDB".to_string(), Some(v)));
+                            }
                         }
                     }
+                    return Some(("MongoDB".to_string(), None));
+                }
+                if lower.contains("ok: 1") || lower.contains("ismaster") || lower.contains("is_master") {
                     return Some(("MongoDB".to_string(), None));
                 }
             }
@@ -264,6 +428,55 @@ impl ServiceDb {
                     }
                     return Some(("OpenLDAP".to_string(), None));
                 }
+                if lower.contains("microsoft") || lower.contains("windows") || lower.contains("active directory") {
+                    return Some(("Active Directory".to_string(), None));
+                }
+                if lower.contains("389") {
+                    return Some(("LDAP".to_string(), None));
+                }
+            }
+            3389 => {
+                if lower.contains("rdp") || lower.contains("terminal") || lower.contains("remote desktop") {
+                    return Some(("RDP".to_string(), None));
+                }
+                if let Ok(re) = Regex::new(r"\x03\x00") {
+                    if re.is_match(banner) {
+                        return Some(("RDP".to_string(), None));
+                    }
+                }
+            }
+            5900 | 5901 | 5902 | 5903 => {
+                if let Ok(re) = Regex::new(r"RFB ([\d.]+)") {
+                    if let Some(c) = re.captures(banner) {
+                        return Some(("VNC".to_string(), c.get(1).map(|m| m.as_str().to_string())));
+                    }
+                }
+                if lower.contains("rfb") || lower.contains("vnc") {
+                    return Some(("VNC".to_string(), None));
+                }
+            }
+            1433 | 1434 => {
+                if lower.contains("ms-sql") || lower.contains("microsoft sql") || lower.contains("sql server") {
+                    return Some(("MSSQL".to_string(), None));
+                }
+            }
+            1521 => {
+                if lower.contains("oracle") || lower.contains("bequeath") || lower.contains("descriptions") {
+                    return Some(("Oracle DB".to_string(), None));
+                }
+            }
+            11211 => {
+                if let Ok(re) = Regex::new(r"(\d+\.\d+\.\d+)") {
+                    if let Some(c) = re.captures(banner) {
+                        let v = c.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                        if v.starts_with("1.") {
+                            return Some(("Memcached".to_string(), Some(v)));
+                        }
+                    }
+                }
+                if lower.contains("stat") || lower.contains("version") || lower.contains("pid") {
+                    return Some(("Memcached".to_string(), None));
+                }
             }
             _ => {}
         }
@@ -275,14 +488,19 @@ fn build_version_rules() -> Vec<VersionRule> {
     vec![
         VersionRule { port: 0, pattern: r"OpenSSH[_-]([\w.]+)", product: "OpenSSH", version_group: 1 },
         VersionRule { port: 0, pattern: r"dropbear[_-]([\w.]+)", product: "Dropbear", version_group: 1 },
+        VersionRule { port: 0, pattern: r"libssh[_-]([\w.]+)", product: "libSSH", version_group: 1 },
         VersionRule { port: 0, pattern: r"Apache/([\d.]+)", product: "Apache", version_group: 1 },
         VersionRule { port: 0, pattern: r"nginx/([\d.]+)", product: "nginx", version_group: 1 },
         VersionRule { port: 0, pattern: r"lighttpd/([\d.]+)", product: "lighttpd", version_group: 1 },
         VersionRule { port: 0, pattern: r"(?i)Caddy[/ ]([\d.]+)", product: "Caddy", version_group: 1 },
         VersionRule { port: 0, pattern: r"(?i)Tomcat[/ ]([\d.]+)", product: "Tomcat", version_group: 1 },
+        VersionRule { port: 0, pattern: r"(\d+\.\d+\.\d+)[-\s]Tomcat", product: "Tomcat", version_group: 1 },
+        VersionRule { port: 0, pattern: r"IIS[ /]([\d.]+)", product: "IIS", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Microsoft-IIS/([\d.]+)", product: "IIS", version_group: 1 },
         VersionRule { port: 0, pattern: r"vsFTPd\s+([\d.]+)", product: "vsFTPd", version_group: 1 },
         VersionRule { port: 0, pattern: r"ProFTPD\s+([\d.]+)", product: "ProFTPD", version_group: 1 },
         VersionRule { port: 0, pattern: r"Pure-FTPd.*?v?([\d.]+)", product: "Pure-FTPd", version_group: 1 },
+        VersionRule { port: 0, pattern: r"FileZilla Server[\s/]*([\d.]+)", product: "FileZilla", version_group: 1 },
         VersionRule { port: 0, pattern: r"PostgreSQL[\s.]+([\d.]+)", product: "PostgreSQL", version_group: 1 },
         VersionRule { port: 0, pattern: r"mysql.*?([\d.]+)", product: "MySQL", version_group: 1 },
         VersionRule { port: 0, pattern: r"MariaDB.*?([\d.]+)", product: "MariaDB", version_group: 1 },
@@ -312,6 +530,84 @@ fn build_version_rules() -> Vec<VersionRule> {
         VersionRule { port: 0, pattern: r"Traefik[/\s]+([\d.]+)", product: "Traefik", version_group: 1 },
         VersionRule { port: 0, pattern: r"Microsoft-HTTPAPI[/\s]+([\d.]+)", product: "Microsoft HTTPAPI", version_group: 1 },
         VersionRule { port: 0, pattern: r"Kestrel[/\s]+([\d.]+)", product: "Kestrel", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Gunicorn[\s/]+([\d.]+)", product: "Gunicorn", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Node\.js[/\s]+([\d.]+)", product: "Node.js", version_group: 1 },
+        VersionRule { port: 0, pattern: r"^SSH-([\d.]+)", product: "SSH", version_group: 1 },
+        VersionRule { port: 0, pattern: r"220[-\s].*FTP", product: "FTP", version_group: 0 },
+        VersionRule { port: 0, pattern: r"220[-\s].*vsFTPd", product: "vsFTPd", version_group: 0 },
+        VersionRule { port: 0, pattern: r"220[-\s].*ProFTPD", product: "ProFTPD", version_group: 0 },
+        VersionRule { port: 0, pattern: r"220[-\s].*Pure-FTPd", product: "Pure-FTPd", version_group: 0 },
+        VersionRule { port: 0, pattern: r"220[-\s].*FileZilla", product: "FileZilla", version_group: 0 },
+        VersionRule { port: 0, pattern: r"Microsoft ESMTP.*([\d.]+)", product: "Microsoft SMTP", version_group: 1 },
+        VersionRule { port: 0, pattern: r"ESMTP Postfix", product: "Postfix", version_group: 0 },
+        VersionRule { port: 0, pattern: r"Exim\s+([\d.]+)", product: "Exim", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Sendmail\s+([\d.]+)", product: "Sendmail", version_group: 1 },
+        VersionRule { port: 0, pattern: r"220 .* ESMTP.*Server ESMTP", product: "SMTP", version_group: 0 },
+        VersionRule { port: 0, pattern: r"\* OK.*Dovecot", product: "Dovecot", version_group: 0 },
+        VersionRule { port: 0, pattern: r"\* OK.*Courier-IMAP", product: "Courier IMAP", version_group: 0 },
+        VersionRule { port: 0, pattern: r"\* OK.*Cyrus", product: "Cyrus IMAP", version_group: 0 },
+        VersionRule { port: 0, pattern: r"\+OK.*Courier", product: "Courier POP3", version_group: 0 },
+        VersionRule { port: 0, pattern: r"\+OK.*Dovecot", product: "Dovecot POP3", version_group: 0 },
+        VersionRule { port: 0, pattern: r"RFB ([\d.]+)", product: "VNC", version_group: 1 },
+        VersionRule { port: 0, pattern: r"MySQL.*?([\d.]+)", product: "MySQL", version_group: 1 },
+        VersionRule { port: 0, pattern: r"([\d.]+)-MariaDB", product: "MariaDB", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Memcached\s+([\d.]+)", product: "Memcached", version_group: 1 },
+        VersionRule { port: 0, pattern: r"InfluxDB[\s/]+([\d.]+)", product: "InfluxDB", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Prometheus[/\s]+([\d.]+)", product: "Prometheus", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Grafana[/\s]+([\d.]+)", product: "Grafana", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Kibana[\s/]+([\d.]+)", product: "Kibana", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Splunk[\s/]+([\d.]+)", product: "Splunk", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Solr[\s/]+([\d.]+)", product: "Solr", version_group: 1 },
+        VersionRule { port: 0, pattern: r"CouchDB[/\s]+([\d.]+)", product: "CouchDB", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Neo4j[/\s]+([\d.]+)", product: "Neo4j", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Consul[/\s]+([\d.]+)", product: "Consul", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Vault[/\s]+([\d.]+)", product: "HashiCorp Vault", version_group: 1 },
+        VersionRule { port: 0, pattern: r"etcd[\s/]+([\d.]+)", product: "etcd", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Kubernetes[/\s]+([\d.]+)", product: "Kubernetes", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Docker Registry[/\s]+([\d.]+)", product: "Docker Registry", version_group: 1 },
+        VersionRule { port: 0, pattern: r"GitLab[/\s]+([\d.]+)", product: "GitLab", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Bitbucket[/\s]+([\d.]+)", product: "Bitbucket", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Jira[/\s]+([\d.]+)", product: "Jira", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Confluence[/\s]+([\d.]+)", product: "Confluence", version_group: 1 },
+        VersionRule { port: 0, pattern: r"SonarQube[/\s]+([\d.]+)", product: "SonarQube", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Nexus[/\s]+([\d.]+)", product: "Sonatype Nexus", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Artifactory[/\s]+([\d.]+)", product: "JFrog Artifactory", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Apache.*?Jserv", product: "Apache JServ", version_group: 0 },
+        VersionRule { port: 0, pattern: r"Apache.*?Coyote", product: "Apache Coyote", version_group: 0 },
+        VersionRule { port: 0, pattern: r"Envoy[/\s]+([\d.]+)", product: "Envoy", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Plex[/\s]+([\d.]+)", product: "Plex", version_group: 1 },
+        VersionRule { port: 0, pattern: r"WordPress[/\s]+([\d.]+)", product: "WordPress", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Drupal[/\s]+([\d.]+)", product: "Drupal", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Joomla[/\s]+([\d.]+)", product: "Joomla", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Magento[/\s]+([\d.]+)", product: "Magento", version_group: 1 },
+        VersionRule { port: 0, pattern: r"MediaWiki[/\s]+([\d.]+)", product: "MediaWiki", version_group: 1 },
+        VersionRule { port: 0, pattern: r"phpMyAdmin[/\s]+([\d.]+)", product: "phpMyAdmin", version_group: 1 },
+        VersionRule { port: 0, pattern: r"PHP[/\s]+([\d.]+)", product: "PHP", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Python[/\s]+([\d.]+)", product: "Python", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Go[/\s]+([\d.]+)", product: "Go net/http", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Ruby[/\s]+([\d.]+)", product: "Ruby", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Unicorn[/\s]+([\d.]+)", product: "Unicorn", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Thin[/\s]+([\d.]+)", product: "Thin", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Phusion Passenger[/\s]+([\d.]+)", product: "Passenger", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Puma[/\s]+([\d.]+)", product: "Puma", version_group: 1 },
+        VersionRule { port: 0, pattern: r"WEBrick[/\s]+([\d.]+)", product: "WEBrick", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Tornado[/\s]+([\d.]+)", product: "Tornado", version_group: 1 },
+        VersionRule { port: 0, pattern: r"CherryPy[/\s]+([\d.]+)", product: "CherryPy", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Twisted[/\s]+([\d.]+)", product: "Twisted", version_group: 1 },
+        VersionRule { port: 0, pattern: r"aiohttp[/\s]+([\d.]+)", product: "aiohttp", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Werkzeug[/\s]+([\d.]+)", product: "Werkzeug", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Boa[/\s]+([\d.]+)", product: "Boa", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Thttpd[/\s]+([\d.]+)", product: "thttpd", version_group: 1 },
+        VersionRule { port: 0, pattern: r"mini_httpd[/\s]+([\d.]+)", product: "mini_httpd", version_group: 1 },
+        VersionRule { port: 0, pattern: r"Apache.*?\(.*?CentOS", product: "Apache (CentOS)", version_group: 0 },
+        VersionRule { port: 0, pattern: r"Apache.*?\(.*?Debian", product: "Apache (Debian)", version_group: 0 },
+        VersionRule { port: 0, pattern: r"Apache.*?\(.*?Ubuntu", product: "Apache (Ubuntu)", version_group: 0 },
+        VersionRule { port: 0, pattern: r"Apache.*?\(.*?FreeBSD", product: "Apache (FreeBSD)", version_group: 0 },
+        VersionRule { port: 0, pattern: r"Apache.*?\(.*?Win", product: "Apache (Windows)", version_group: 0 },
+        VersionRule { port: 0, pattern: r"nginx.*?\(.*?Ubuntu", product: "nginx (Ubuntu)", version_group: 0 },
+        VersionRule { port: 0, pattern: r"nginx.*?\(.*?Debian", product: "nginx (Debian)", version_group: 0 },
+        VersionRule { port: 0, pattern: r"nginx.*?\(.*?CentOS", product: "nginx (CentOS)", version_group: 0 },
+        VersionRule { port: 0, pattern: r"nginx.*?\(.*?FreeBSD", product: "nginx (FreeBSD)", version_group: 0 },
     ]
 }
 
