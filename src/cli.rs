@@ -118,7 +118,13 @@ pub struct CreateArgs {
     #[arg(long = "no-leet", help = "Disable leet speak variations")]
     pub no_leet: bool,
 
-    #[arg(short = 'o', long = "output", help = "Write wordlist to file (default: stdout)", value_name = "FILE")]
+    #[arg(short = 'F', long = "filename", help = "Custom filename (without extension) inside wordlists folder", value_name = "NAME")]
+    pub filename: Option<String>,
+
+    #[arg(long = "dir", help = "Custom output directory (default: ./wordlists/)", value_name = "DIR")]
+    pub dir: Option<PathBuf>,
+
+    #[arg(short = 'o', long = "output", help = "Exact output file path (overrides --dir/--filename)", value_name = "FILE")]
     pub output: Option<PathBuf>,
 }
 
@@ -127,7 +133,7 @@ pub struct CreateArgs {
     name = "veltrix",
     version = "1.1.0",
     about = "\
-VELTRIX v1.1 - Multi-Protocol Brute Force & Security Auditing Toolkit
+VELTRIX v1.1 - Multi-Protocol Brute Force & Security Auditing Toolkit - By AniipID
 
 \u{26a0}  WARNING: For authorized security testing ONLY.
 \u{26a0}  Unauthorized use is ILLEGAL.
@@ -136,7 +142,7 @@ Supports 18+ protocols (ssh, ftp, telnet, smtp, pop3, imap, rdp,
 mysql, postgres, ldap, redis, http, vnc, mongodb, mssql, smb, snmp)
 plus port scanning, wordlist gen, ML prediction, distributed mode.",
     long_about = concat!(
-        "VELTRIX v1.1 - Multi-Protocol Brute Force Toolkit\n",
+        "VELTRIX v1.1 - Multi-Protocol Brute Force & Security Auditing Toolkit - By AniipID\n",
         "===================================================\n\n",
         "A high-performance, multi-protocol brute force & security auditing tool\n",
         "written in Rust. Supports 18+ protocols with advanced features.\n\n",
@@ -423,6 +429,7 @@ pub fn print_banner() {
 ║                  VELTRIX v1.1                        ║
 ║         Multi-Protocol Brute Force Toolkit           ║
 ║           An advanced security auditing tool         ║
+║                   By AniipID                         ║
 ╚══════════════════════════════════════════════════════╝
     "#;
     println!("{}", banner.yellow());

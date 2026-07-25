@@ -14,12 +14,12 @@ NC='\033[0m'
 spinner() {
     local pid=$1
     local msg="$2"
-    local chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+    local chars='◐◓◑◒'
     local i=0
     while kill -0 "$pid" 2>/dev/null; do
         printf "\r  ${CYAN}%s${NC} %s" "${chars:$i:1}" "$msg"
         i=$(( (i+1) % ${#chars} ))
-        sleep 0.08
+        sleep 0.12
     done
     printf "\r  ${GREEN}✓${NC} %s\n" "$msg"
 }
@@ -32,7 +32,9 @@ progress_bar() {
     local bar_len=30
     local filled=$(( pct * bar_len / 100 ))
     local empty=$(( bar_len - filled ))
-    printf "\r  ${CYAN}▶${NC} %s [${CYAN}" "$msg"
+    local spin_chars='◐◓◑◒'
+    local si=$(( (current - 1) % 4 ))
+    printf "\r  ${CYAN}%s${NC} %s [${CYAN}" "${spin_chars:$si:1}" "$msg"
     printf '█%.0s' $(seq 1 $filled)
     printf '░%.0s' $(seq 1 $empty)
     printf "${NC}] %3d%%" "$pct"
@@ -87,14 +89,10 @@ echo -e ""
 sleep 0.2
 
 # Celebration animation
-for frame in \
-    "  🎉 ${GREEN}INSTALLATION COMPLETE!${NC}" \
-    "  ✨ ${GREEN}INSTALLATION COMPLETE!${NC}" \
-    "  🎉 ${GREEN}INSTALLATION COMPLETE!${NC}" \
-    "  ✨ ${GREEN}INSTALLATION COMPLETE!${NC}"
-do
-    printf "\r%s" "$frame"
-    sleep 0.15
+for i in 0 1 2 3 2 1; do
+    c='◐◓◑◒'
+    printf "\r  ${CYAN}%s${NC} ${GREEN}INSTALLATION COMPLETE!${NC}" "${c:$i:1}"
+    sleep 0.2
 done
 echo -e "\n"
 

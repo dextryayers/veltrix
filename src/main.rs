@@ -7,6 +7,7 @@ mod proxy;
 mod scanner;
 mod utils;
 
+use std::path::PathBuf;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -15,6 +16,7 @@ use cli::{print_banner, print_protocols, Cli, Commands, ProtocolArgs, CreateArgs
 use core::attack::AttackOrchestrator;
 use crate::utils::wordlist_gen::{WordlistConfig, generate_wordlist};
 use colored::Colorize;
+use chrono::Local;
 
 #[tokio::main]
 async fn main() {
@@ -347,7 +349,29 @@ async fn run_create(args: &CreateArgs) {
         leet: !args.no_leet,
     };
     let words = generate_wordlist(&cfg);
-    match args.output {
+
+    let out_path = match args.output {
+        Some(ref path) => Some(path.clone()),
+        None if args.dir.is_some() || args.filename.is_some() => {
+            let dir = args.dir.clone().unwrap_or_else(|| PathBuf::from("wordlists"));
+            std::fs::create_dir_all(&dir).unwrap_or_else(|e| {
+                eprintln!("Failed to create directory: {}", e);
+                std::process::exit(1);
+            });
+            let stem = args.filename.clone().unwrap_or_else(|| {
+                let parts: Vec<&str> = [
+                    args.name.as_deref().unwrap_or(""),
+                    args.company.as_deref().unwrap_or(""),
+                ].iter().filter(|s| !s.is_empty()).copied().collect();
+                if parts.is_empty() { "wordlist".to_string() } else { parts.join("_").replace(' ', "_") }
+            });
+            let filename = format!("{}_{}.txt", stem, chrono::Local::now().format("%Y%m%d_%H%M%S"));
+            Some(dir.join(filename))
+        }
+        None => None,
+    };
+
+    match out_path {
         Some(ref path) => {
             let content = words.iter().cloned().collect::<Vec<_>>().join("\n");
             std::fs::write(path, &content).unwrap_or_else(|e| {
