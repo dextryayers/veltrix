@@ -1,93 +1,63 @@
 use std::path::PathBuf;
-use std::time::Duration;
 use clap::Parser;
 use colored::Colorize;
 
-use std::path::Path;
 use crate::core::config::{AttackConfig, OutputFormat};
-use crate::core::config_loader::ConfigFile;
-use crate::core::error::AttackError;
 use crate::utils::wordlist_gen::WordlistConfig;
 
 #[derive(Parser, Debug)]
 #[command(
     name = "veltrix",
-    version = "1.0.0",
-    author = "aniippxploit",
-    about = "Multi-protocol brute force toolkit for security professionals",
+    version = "1.1.0",
+    about = "Multi-Protocol Brute Force Toolkit",
     long_about = concat!(
-        "Veltrix - Multi-Protocol Brute Force Toolkit\n",
-        "=============================================\n\n",
+        "Veltrix v1.1 - Multi-Protocol Brute Force Toolkit\n",
+        "===================================================\n\n",
         "A high-performance, multi-protocol brute force tool written in Rust.\n",
         "Supports SSH, FTP, Telnet, SMTP, POP3, RDP, MySQL, HTTP, and more.\n\n",
         "Examples:\n",
-        "  veltrix -t 192.168.1.1 -P ssh -U users.txt -W passwords.txt\n",
-        "  veltrix -T targets.txt -P ssh,ftp -U users.txt -W passes.txt -x 20\n",
-        "  veltrix -t 10.0.0.5:3389 -P rdp -C combos.txt -o results.json -f json\n\n",
+        "  veltrix -t 192.168.1.1 -u admin -W passwords.txt --port 22\n",
+        "  veltrix -t 10.0.0.1 -U users.txt -W passes.txt -x 20\n",
+        "  veltrix -t 10.0.0.5 -C combos.txt -o results.json -f json\n\n",
         "CIDR & Range:\n",
-        "  veltrix -t 192.168.1.0/24 -P ssh -U users.txt -W passes.txt\n",
-        "  veltrix -t 10.0.0.1-10.0.0.10 -P rdp -C combos.txt\n\n",
-        "Hybrid Attack (Rules):\n",
-        "  veltrix -t 10.0.0.1 -P ssh -U users.txt -W passes.txt --rules rules/common.rule\n\n",
-        "⚠  WARNING: Only use on systems you own or have written permission to test."
+        "  veltrix -t 192.168.1.0/24 -U users.txt -W passes.txt\n",
+        "  veltrix -t 10.0.0.1-10.0.0.10 -C combos.txt\n\n",
+        "\u{26a0}  WARNING: Only use on systems you own or have written permission to test."
     ),
-    verbatim_doc_comment
+    verbatim_doc_comment,
+    arg_required_else_help = true,
 )]
-pub struct CliArgs {
-    // ── Target Options ──
-    #[arg(short = 't', long = "target", help = "Target host:port, CIDR, or range (repeatable)", value_name = "HOST[:PORT]")]
+pub struct Cli {
+    // ── Target ──
+    #[arg(short = 't', long = "target", help = "Target host:port or IP address (support domain/IP local/public)", value_name = "HOST[:PORT]")]
     pub targets: Vec<String>,
 
-    #[arg(short = 'T', long = "target-file", help = "File containing list of targets (one per line)", value_name = "FILE")]
+    #[arg(long = "list", help = "File containing list of target hosts (one per line)", value_name = "FILE")]
     pub target_file: Option<PathBuf>,
 
-    #[arg(short = 'p', long = "port", help = "Port number(s) - defaults per protocol", value_name = "PORT")]
+    #[arg(long = "port", help = "Port number(s)", value_name = "PORT")]
     pub ports: Vec<u16>,
 
-    // ── Protocol Options ──
-    #[arg(
-        short = 'P',
-        long = "protocol",
-        help = "Protocol(s): ssh, ftp, telnet, smtp, pop3, rdp, mysql, postgres, ldap, redis, http",
-        value_name = "PROTO",
-        value_delimiter = ',',
-        required_unless_present = "list_protocols"
-    )]
-    pub protocols: Vec<String>,
-
-    #[arg(short = 'L', long = "list-protocols", help = "List supported protocols and exit")]
+    #[arg(short = 'l', long = "list-protocols", help = "List supported protocols and exit")]
     pub list_protocols: bool,
 
-    // ── Credential Options ──
-    #[arg(short = 'u', long = "user", help = "Single username (repeatable)", value_name = "USER")]
+    // ── Credentials ──
+    #[arg(short = 'u', long = "user", help = "Single username", value_name = "USER")]
     pub users: Vec<String>,
 
-    #[arg(short = 'U', long = "user-file", help = "File with usernames (one per line)", value_name = "FILE")]
+    #[arg(short = 'U', long = "user-file", help = "File containing list of usernames (one per line)", value_name = "FILE")]
     pub user_file: Option<PathBuf>,
 
-    #[arg(short = 'w', long = "password", help = "Single password (repeatable)", value_name = "PASS")]
+    #[arg(short = 'p', long = "password", visible_alias = "pwd", help = "Single password", value_name = "PASS")]
     pub passwords: Vec<String>,
 
-    #[arg(short = 'W', long = "password-file", help = "File with passwords (one per line)", value_name = "FILE")]
+    #[arg(short = 'W', long = "password-list", visible_alias = "pl", help = "File containing list of passwords (one per line)", value_name = "FILE")]
     pub password_file: Option<PathBuf>,
 
     #[arg(short = 'C', long = "combo", help = "Combo list: user:pass per line", value_name = "FILE")]
     pub combo_file: Option<PathBuf>,
 
-    #[arg(long = "single-user", help = "Single user mode: use only the first user")]
-    pub single_user: bool,
-
-    #[arg(long = "spray", help = "Credential spraying: one password against all users (anti-lockout)")]
-    pub spray: bool,
-
-    // ── Hybrid Attack ──
-    #[arg(long = "rules", help = "Rule file for password mutation (hybrid attack)", value_name = "FILE")]
-    pub rules: Option<PathBuf>,
-
-    #[arg(long = "max-mutations", help = "Max password mutations per base word", default_value = "500", value_name = "N")]
-    pub max_mutations: usize,
-
-    // ── Performance Options ──
+    // ── Performance ──
     #[arg(short = 'x', long = "threads", help = "Concurrent workers", default_value = "10", value_name = "N")]
     pub threads: usize,
 
@@ -103,22 +73,23 @@ pub struct CliArgs {
     #[arg(long = "retries", help = "Connection retries", default_value = "1", value_name = "N")]
     pub retries: u32,
 
-    // ── RDP Options ──
+    // ── Protocol-specific ──
     #[arg(long = "rdp-domain", help = "RDP domain (prepended to username)", value_name = "DOMAIN")]
     pub rdp_domain: Option<String>,
 
-    // ── HTTP Form Options ──
     #[arg(long = "http-userfield", help = "HTTP form username field name", value_name = "FIELD")]
     pub http_userfield: Option<String>,
+
     #[arg(long = "http-passfield", help = "HTTP form password field name", value_name = "FIELD")]
     pub http_passfield: Option<String>,
+
     #[arg(long = "http-success", help = "HTTP form success indicator string", value_name = "TEXT")]
     pub http_success: Option<String>,
 
     #[arg(long = "max-password-len", help = "Truncate passwords to N characters", value_name = "N")]
     pub max_password_len: Option<usize>,
 
-    // ── Proxy Options ──
+    // ── Proxy ──
     #[arg(long = "proxy", help = "Proxy: type://host[:port]", value_name = "PROXY")]
     pub proxy: Option<String>,
 
@@ -128,55 +99,35 @@ pub struct CliArgs {
     #[arg(long = "proxy-chain", help = "Comma-separated proxy chain: type://host:port,...", value_name = "PROXIES")]
     pub proxy_chain: Option<String>,
 
-    // ── Output Options ──
+    // ── Output ──
     #[arg(short = 'o', long = "output", help = "Write results to FILE", value_name = "FILE")]
     pub output: Option<PathBuf>,
 
     #[arg(short = 'f', long = "format", help = "Output format: plain, json, csv, html", default_value = "plain", value_name = "FMT")]
     pub format: String,
 
-    #[arg(long = "resume", help = "Resume from session file", value_name = "FILE")]
-    pub resume: Option<PathBuf>,
-
-    // ── Config ──
-    #[arg(long = "config", help = "JSON config file", value_name = "FILE")]
-    pub config: Option<PathBuf>,
-
-    // ── Distributed Mode Options ──
-    #[arg(long = "distributed-coordinator", help = "Run as coordinator on addr:port (e.g. 0.0.0.0:8443)", value_name = "BIND")]
-    pub distributed_coordinator: Option<String>,
-
-    #[arg(long = "distributed-worker", help = "Run as worker, connect to coordinator addr:port", value_name = "ADDR")]
-    pub distributed_worker: Option<String>,
-
-    #[arg(long = "distributed-token", help = "Auth token for coordinator↔worker communication", value_name = "TOKEN")]
-    pub distributed_token: Option<String>,
-
-    #[arg(long = "distributed-name", help = "Worker hostname (defaults to OS hostname)", value_name = "NAME")]
-    pub distributed_name: Option<String>,
-
-    // ── Plugin Options ──
+    // ── Plugin ──
     #[arg(long = "plugin", help = "External plugin binary path (repeatable)", value_name = "PATH")]
     pub plugins: Vec<String>,
 
-    // ── REST API Options ──
-    #[arg(long = "api", help = "Start REST API server on addr:port (e.g. 127.0.0.1:8080)", value_name = "BIND")]
-    pub api_bind: Option<String>,
+    #[arg(long = "list-plugin", help = "List all registered plugins and exit")]
+    pub list_plugin: bool,
 
-    // ── Encrypted Output Options ──
+    // ── Encrypt ──
     #[arg(long = "encrypt", help = "Encrypt output file with AES-256-GCM")]
     pub encrypt: bool,
 
     #[arg(long = "encrypt-passphrase", help = "Passphrase for encryption (prompted if not provided)", value_name = "PASSPHRASE")]
     pub encrypt_passphrase: Option<String>,
 
+    // ── Decrypt ──
     #[arg(long = "decrypt", help = "Decrypt an encrypted file", value_name = "FILE")]
     pub decrypt_file: Option<PathBuf>,
 
     #[arg(long = "decrypt-output", help = "Output path for decrypted file (default: stdout)", value_name = "FILE")]
     pub decrypt_output: Option<PathBuf>,
 
-    // ── Wordlist Generation Options ──
+    // ── Wordlist Generation ──
     #[arg(long = "gen-wordlist", help = "Generate a wordlist from target information")]
     pub gen_wordlist: bool,
 
@@ -204,7 +155,7 @@ pub struct CliArgs {
     #[arg(long = "wl-output", help = "Write wordlist to file (default: stdout)", value_name = "FILE")]
     pub wl_output: Option<PathBuf>,
 
-    // ── ML Password Prediction Options ──
+    // ── ML Password Prediction ──
     #[arg(long = "ml-train", help = "Train Markov model on a wordlist file", value_name = "FILE")]
     pub ml_train: Option<PathBuf>,
 
@@ -223,201 +174,12 @@ pub struct CliArgs {
     #[arg(long = "ml-output", help = "Output file for generated passwords", value_name = "FILE")]
     pub ml_output: Option<PathBuf>,
 
-    // ── Port Scanner Options ──
-    #[arg(long = "scan", help = "Run port scan mode on target hosts")]
-    pub scan: bool,
-
-    #[arg(long = "scan-ports", help = "Ports to scan: '22,80,443', '1-1000', or 'common' (default: common top 150)", value_name = "PORTS")]
-    pub scan_ports: Option<String>,
-
-    #[arg(long = "scan-timeout", help = "Per-port timeout in seconds (default: 5)", default_value = "5", value_name = "SEC")]
-    pub scan_timeout: u64,
-
-    #[arg(long = "scan-rate", help = "Max concurrent scans (default: 100)", default_value = "100", value_name = "N")]
-    pub scan_rate: usize,
-
-    #[arg(long = "scan-no-banner", help = "Disable banner grabbing")]
-    pub scan_no_banner: bool,
-
-    // ── Behavior Options ──
-    #[arg(long = "stop-on-first", help = "Stop after first success per target")]
-    pub stop_on_first: bool,
-
-    #[arg(short = 'v', long = "verbose", help = "Verbose output (all attempts)")]
-    pub verbose: bool,
-
-    #[arg(short = 'q', long = "quiet", help = "Quiet mode (successes only)")]
-    pub quiet: bool,
-
-    #[arg(long = "no-banner", help = "Hide startup banner")]
-    pub no_banner: bool,
-
+    // ── Verbose ──
+    #[arg(short = 'v', long = "verbose", action = clap::ArgAction::Count, help = "Verbose level 1 (-v) or verbose level 2 (-vv)")]
+    pub verbose: u8,
 }
 
-impl CliArgs {
-    pub fn into_config(self) -> Result<AttackConfig, AttackError> {
-        let distributed = match (&self.distributed_coordinator, &self.distributed_worker) {
-            (Some(bind), None) => Some(crate::core::config::DistributedMode::Coordinator { bind: bind.clone() }),
-            (None, Some(addr)) => Some(crate::core::config::DistributedMode::Worker { connect: addr.clone() }),
-            (Some(_), Some(_)) => return Err(AttackError::config("Cannot be both coordinator and worker")),
-            (None, None) => None,
-        };
-
-        let mut config = AttackConfig {
-            targets: Vec::new(),
-            target_file: None,
-            users: Vec::new(),
-            passwords: Vec::new(),
-            user_file: None,
-            password_file: None,
-            combo_file: None,
-            protocols: Vec::new(),
-            ports: Vec::new(),
-            threads: 10,
-            timeout: Duration::from_secs(10),
-            delay: Duration::ZERO,
-            rate_limit: None,
-            proxy: None,
-            proxy_file: None,
-            proxy_chain: None,
-            output_file: None,
-            output_format: OutputFormat::Plain,
-            resume_file: None,
-            config_file: self.config.clone(),
-            checkpoint_interval: 100,
-            rdp_domain: None,
-            http_userfield: None,
-            http_passfield: None,
-            http_success: None,
-            verbose: false,
-            quiet: false,
-            no_banner: false,
-            single_user_mode: false,
-            spray_mode: false,
-            stop_on_first: false,
-            retries: 1,
-            rule_file: None,
-            max_mutations: 500,
-            max_password_len: None,
-            distributed,
-            distributed_token: self.distributed_token,
-            distributed_name: self.distributed_name,
-            plugins: self.plugins.clone(),
-            api_bind: self.api_bind.clone(),
-            encrypt: self.encrypt,
-            encrypt_passphrase: self.encrypt_passphrase,
-            decrypt_file: self.decrypt_file,
-            decrypt_output: self.decrypt_output,
-        };
-
-        if let Some(ref config_path) = self.config {
-            let path = Path::new(config_path);
-            if path.exists() {
-                let cf = ConfigFile::load(path)?;
-                cf.merge_into(&mut config);
-            } else {
-                return Err(AttackError::config(format!("Config file not found: {}", config_path.display())));
-            }
-        }
-
-        if !self.targets.is_empty() {
-            config.targets = self.targets;
-        }
-        if self.target_file.is_some() {
-            config.target_file = self.target_file;
-        }
-        if !self.users.is_empty() {
-            config.users = self.users;
-        }
-        if !self.passwords.is_empty() {
-            config.passwords = self.passwords;
-        }
-        if self.user_file.is_some() {
-            config.user_file = self.user_file;
-        }
-        if self.password_file.is_some() {
-            config.password_file = self.password_file;
-        }
-        if self.combo_file.is_some() {
-            config.combo_file = self.combo_file;
-        }
-        if !self.protocols.is_empty() {
-            config.protocols = self.protocols;
-        }
-        if !self.ports.is_empty() {
-            config.ports = self.ports;
-        }
-        if self.config.is_some() {
-            // config_file already set above
-        }
-        if self.single_user {
-            config.single_user_mode = true;
-        }
-        if self.spray {
-            config.spray_mode = true;
-        }
-        if self.rules.is_some() {
-            config.rule_file = self.rules;
-        }
-        config.max_mutations = self.max_mutations;
-        config.threads = self.threads;
-        config.timeout = Duration::from_secs(self.timeout);
-        config.delay = Duration::from_millis(self.delay);
-        if self.rate_limit.is_some() {
-            config.rate_limit = self.rate_limit;
-        }
-        if self.retries != 1 {
-            config.retries = self.retries;
-        }
-        if let Some(max_len) = self.max_password_len {
-            config.max_password_len = Some(max_len);
-        }
-        if self.proxy.is_some() {
-            config.proxy = self.proxy;
-        }
-        if self.proxy_file.is_some() {
-            config.proxy_file = self.proxy_file;
-        }
-        if self.proxy_chain.is_some() {
-            config.proxy_chain = self.proxy_chain;
-        }
-        if self.rdp_domain.is_some() {
-            config.rdp_domain = self.rdp_domain;
-        }
-        if self.http_userfield.is_some() {
-            config.http_userfield = self.http_userfield;
-        }
-        if self.http_passfield.is_some() {
-            config.http_passfield = self.http_passfield;
-        }
-        if self.http_success.is_some() {
-            config.http_success = self.http_success;
-        }
-        if self.output.is_some() {
-            config.output_file = self.output;
-        }
-        if self.format != "plain" {
-            config.output_format = OutputFormat::from_str(&self.format);
-        }
-        if self.resume.is_some() {
-            config.resume_file = self.resume;
-        }
-        if self.verbose {
-            config.verbose = true;
-        }
-        if self.quiet {
-            config.quiet = true;
-        }
-        if self.no_banner {
-            config.no_banner = true;
-        }
-        if self.stop_on_first {
-            config.stop_on_first = true;
-        }
-
-        Ok(config)
-    }
-
+impl Cli {
     pub fn to_wordlist_config(&self) -> WordlistConfig {
         WordlistConfig {
             name: self.wl_name.clone(),
@@ -430,37 +192,121 @@ impl CliArgs {
         }
     }
 
-    pub fn should_show_banner(&self) -> bool {
-        !self.no_banner && !self.quiet
+    pub fn build_attack_config(&self) -> AttackConfig {
+        AttackConfig {
+            targets: self.targets.clone(),
+            target_file: self.target_file.clone(),
+            users: self.users.clone(),
+            passwords: self.passwords.clone(),
+            user_file: self.user_file.clone(),
+            password_file: self.password_file.clone(),
+            combo_file: self.combo_file.clone(),
+            protocols: vec![],
+            ports: self.ports.clone(),
+            threads: self.threads,
+            timeout: std::time::Duration::from_secs(self.timeout),
+            delay: std::time::Duration::from_millis(self.delay),
+            rate_limit: self.rate_limit,
+            proxy: self.proxy.clone(),
+            proxy_file: self.proxy_file.clone(),
+            proxy_chain: self.proxy_chain.clone(),
+            output_file: self.output.clone(),
+            output_format: OutputFormat::from_str(&self.format),
+            resume_file: None,
+            config_file: None,
+            checkpoint_interval: 100,
+            rdp_domain: self.rdp_domain.clone(),
+            http_userfield: self.http_userfield.clone(),
+            http_passfield: self.http_passfield.clone(),
+            http_success: self.http_success.clone(),
+            verbose: self.verbose > 0,
+            quiet: false,
+            no_banner: false,
+            single_user_mode: false,
+            spray_mode: false,
+            stop_on_first: false,
+            retries: self.retries,
+            rule_file: None,
+            max_mutations: 500,
+            max_password_len: self.max_password_len,
+            distributed: None,
+            distributed_token: None,
+            distributed_name: None,
+            plugins: self.plugins.clone(),
+            api_bind: None,
+            encrypt: self.encrypt,
+            encrypt_passphrase: self.encrypt_passphrase.clone(),
+            decrypt_file: self.decrypt_file.clone(),
+            decrypt_output: self.decrypt_output.clone(),
+        }
+    }
+}
+
+pub fn port_to_protocol(port: u16) -> Option<&'static str> {
+    match port {
+        22 => Some("ssh"),
+        21 => Some("ftp"),
+        23 => Some("telnet"),
+        25 => Some("smtp"),
+        110 => Some("pop3"),
+        143 => Some("imap"),
+        389 => Some("ldap"),
+        636 => Some("ldap"),
+        443 => Some("http"),
+        445 => Some("smb"),
+        993 => Some("imap"),
+        995 => Some("pop3"),
+        1433 => Some("mssql"),
+        3306 => Some("mysql"),
+        3389 => Some("rdp"),
+        5432 => Some("postgres"),
+        587 => Some("smtp"),
+        465 => Some("smtp"),
+        5900 => Some("vnc"),
+        5901 => Some("vnc"),
+        6379 => Some("redis"),
+        6380 => Some("redis"),
+        8080 => Some("http"),
+        8443 => Some("http"),
+        27017 => Some("mongodb"),
+        161 => Some("snmp"),
+        _ => None,
     }
 }
 
 pub fn print_banner() {
     let banner = r#"
 ╔══════════════════════════════════════════════════════╗
-║                    VELTRIX v1.0                      ║
+║                  VELTRIX v1.1                        ║
 ║         Multi-Protocol Brute Force Toolkit           ║
 ║           An advanced security auditing tool         ║
 ╚══════════════════════════════════════════════════════╝
     "#;
     println!("{}", banner.yellow());
-    println!("{}", "⚠  WARNING: Only use on systems you own or have permission to test.".red().bold());
+    println!("{}", "\u{26a0}  WARNING: Only use on systems you own or have permission to test.".red().bold());
     println!();
 }
 
 pub fn print_protocols() {
     println!("{}", "Supported Protocols:".green().bold());
-    println!("  {:<12} {:<10} {}", "Protocol", "Default", "Auth Methods");
-    println!("  {:<12} {:<10} {}", "────────", "───────", "────────────");
-    println!("  {:<12} {:<10} {}", "ssh", "22", "password, key");
-    println!("  {:<12} {:<10} {}", "ftp", "21", "plain, TLS/SSL");
-    println!("  {:<12} {:<10} {}", "telnet", "23", "plaintext");
-    println!("  {:<12} {:<10} {}", "smtp", "25", "LOGIN, PLAIN, CRAM-MD5");
-    println!("  {:<12} {:<10} {}", "pop3", "110", "USER/PASS, APOP");
-    println!("  {:<12} {:<10} {}", "rdp", "3389", "NLA, RDP Standard");
-    println!("  {:<12} {:<10} {}", "mysql", "3306", "mysql_native_password");
-    println!("  {:<12} {:<10} {}", "postgres", "5432", "md5, cleartext");
-    println!("  {:<12} {:<10} {}", "ldap", "389", "simple bind");
-    println!("  {:<12} {:<10} {}", "redis", "6379", "AUTH");
-    println!("  {:<12} {:<10} {}", "http", "80/443", "Basic, Digest");
+    println!("  {:<12} {:<12} {}", "Protocol", "Default Port(s)", "Auth Methods");
+    println!("  {:<12} {:<12} {}", "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}", "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}", "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}");
+    println!("  {:<12} {:<12} {}", "ssh", "22", "password, key");
+    println!("  {:<12} {:<12} {}", "ftp", "21", "plain, TLS/SSL");
+    println!("  {:<12} {:<12} {}", "telnet", "23", "plaintext");
+    println!("  {:<12} {:<12} {}", "smtp", "25/465/587", "LOGIN, PLAIN, CRAM-MD5, STARTTLS");
+    println!("  {:<12} {:<12} {}", "pop3", "110/995", "USER/PASS, APOP, STLS");
+    println!("  {:<12} {:<12} {}", "imap", "143/993", "LOGIN, PLAIN, CRAM-MD5, STARTTLS");
+    println!("  {:<12} {:<12} {}", "rdp", "3389", "NLA, RDP Standard");
+    println!("  {:<12} {:<12} {}", "mysql", "3306", "mysql_native_password");
+    println!("  {:<12} {:<12} {}", "postgres", "5432", "md5, cleartext, SSL");
+    println!("  {:<12} {:<12} {}", "ldap", "389/636", "simple bind, LDAPS");
+    println!("  {:<12} {:<12} {}", "redis", "6379/6380", "AUTH, TLS");
+    println!("  {:<12} {:<12} {}", "http", "80/443", "Basic, Digest, Form");
+    println!("  {:<12} {:<12} {}", "vnc", "5900", "VNC Auth");
+    println!("  {:<12} {:<12} {}", "mongodb", "27017", "SCRAM, MONGODB-CR");
+    println!("  {:<12} {:<12} {}", "mssql", "1433", "SQL Server Auth");
+    println!("  {:<12} {:<12} {}", "smb", "445", "NTLMv1/v2");
+    println!("  {:<12} {:<12} {}", "snmp", "161", "community strings (v1/v2c)");
+    println!();
 }
