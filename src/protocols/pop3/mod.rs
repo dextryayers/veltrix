@@ -200,8 +200,12 @@ impl Protocol for Pop3Protocol {
             let stream = match proxy {
                 Some(p) => p.tcp_connect(&addr, timeout_dur).await
                     .map_err(|e| format!("Connect: {}", e))?,
-                None => TcpStream::connect(&addr).await
-                    .map_err(|e| format!("Connect: {}", e))?,
+                None => {
+                    let s = TcpStream::connect(&addr).await
+                        .map_err(|e| format!("Connect: {}", e))?;
+                    s.set_nodelay(true).ok();
+                    s
+                },
             };
 
             if use_tls {

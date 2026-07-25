@@ -45,6 +45,10 @@ impl WorkerPool {
     }
 
     pub fn submit(&mut self, task: WorkerTask) {
+        if !self.running.load(Ordering::Relaxed) {
+            return;
+        }
+
         let semaphore = Arc::clone(&self.semaphore);
         let running = Arc::clone(&self.running);
         let retries = self.retries;
@@ -54,20 +58,24 @@ impl WorkerPool {
         let skipped = Arc::clone(&self.skipped_users);
         let proxy = self.get_proxy_for(task.attempt_index as usize);
         let current_proxy_idx = task.attempt_index as usize;
-        let protocol = task.target.protocol.clone();
-        let target_clone = task.target;
-        let credential_clone = task.credential;
+        let target = task.target;
+        let credential = task.credential;
+        let protocol = target.protocol.clone();
 
         let handle = tokio::spawn(async move {
             let _permit = semaphore.acquire().await.unwrap();
             let mut last_result = None;
             let mut current_proxy = proxy;
 
-            if skipped.lock().unwrap().contains(&credential_clone.username) {
+            let is_skipped = {
+                let sk = skipped.lock().unwrap();
+                sk.contains(&credential.username)
+            };
+            if is_skipped {
                 return (
                     AuthResult::new(
-                        target_clone.host.clone(), target_clone.port, &protocol,
-                        credential_clone.username.clone(), credential_clone.password.clone(),
+                        target.host, target.port, &protocol,
+                        credential.username, credential.password,
                         false, std::time::Duration::ZERO,
                         Some("Skipped (account locked)".into()),
                     ),
@@ -80,8 +88,8 @@ impl WorkerPool {
                 None => {
                     return (
                         AuthResult::new(
-                            target_clone.host.clone(), target_clone.port, &protocol,
-                            credential_clone.username.clone(), credential_clone.password.clone(),
+                            target.host, target.port, &protocol,
+                            credential.username, credential.password,
                             false, std::time::Duration::ZERO,
                             Some(format!("Unsupported protocol: {}", protocol)),
                         ),
@@ -91,12 +99,12 @@ impl WorkerPool {
             };
 
             for attempt in 0..=retries {
-                if !running.load(Ordering::SeqCst) {
+                if !running.load(Ordering::Relaxed) {
                     break;
                 }
 
                 let result = handler
-                    .authenticate(&target_clone, &credential_clone, timeout, &current_proxy)
+                    .authenticate(&target, &credential, timeout, &current_proxy)
                     .await;
 
                 let classified = crate::utils::patterns::classify_error(
@@ -109,11 +117,16 @@ impl WorkerPool {
                 }
 
                 if crate::utils::patterns::should_skip_user(&classified) {
-                    skipped.lock().unwrap().insert(credential_clone.username.clone());
+                    skipped.lock().unwrap().insert(credential.username.clone());
                     last_result = Some(AuthResult {
                         error: Some(format!("Account locked: {}", classified.message)),
                         ..result
                     });
+                    break;
+                }
+
+                if !classified._retryable {
+                    last_result = Some(result);
                     break;
                 }
 

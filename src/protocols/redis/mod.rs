@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use native_tls::TlsConnector as NativeTlsConnector;
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_native_tls::TlsConnector;
@@ -14,6 +14,20 @@ use super::Protocol;
 
 pub struct RedisProtocol;
 
+async fn try_cmd(
+    reader: &mut BufReader<tokio::net::tcp::OwnedReadHalf>,
+    writer: &mut tokio::net::tcp::OwnedWriteHalf,
+    cmd: &str,
+) -> Result<String, String> {
+    writer.write_all(cmd.as_bytes()).await
+        .map_err(|e| format!("Write cmd: {}", e))?;
+    writer.flush().await.ok();
+    let mut buf = String::new();
+    reader.read_line(&mut buf).await
+        .map_err(|e| format!("Read resp: {}", e))?;
+    Ok(buf.trim().to_string())
+}
+
 async fn redis_auth(
     reader: &mut BufReader<tokio::net::tcp::OwnedReadHalf>,
     writer: &mut tokio::net::tcp::OwnedWriteHalf,
@@ -21,29 +35,37 @@ async fn redis_auth(
     credential: &Credential,
     start: Instant,
 ) -> Result<AuthResult, String> {
-    let cmd = format!("AUTH {} {}\r\n", credential.username, credential.password);
-    writer.write_all(cmd.as_bytes()).await
-        .map_err(|e| format!("AUTH cmd: {}", e))?;
-    writer.flush().await.ok();
-
-    let mut buf = String::new();
-    reader.read_line(&mut buf).await
-        .map_err(|e| format!("Read resp: {}", e))?;
-
-    let trimmed = buf.trim();
-    if trimmed.starts_with("+OK") {
-        Ok(AuthResult::new(target.host.clone(), target.port, "redis",
+    let resp = try_cmd(reader, writer, "PING\r\n").await?;
+    if resp == "+PONG" {
+        return Ok(AuthResult::new(target.host.clone(), target.port, "redis",
             credential.username.clone(), credential.password.clone(),
-            true, start.elapsed(), None))
-    } else if trimmed.starts_with("-ERR") || trimmed.starts_with("-NOAUTH") {
-        Ok(AuthResult::new(target.host.clone(), target.port, "redis",
-            credential.username.clone(), credential.password.clone(),
-            false, start.elapsed(), Some(trimmed.to_string())))
-    } else {
-        Ok(AuthResult::new(target.host.clone(), target.port, "redis",
-            credential.username.clone(), credential.password.clone(),
-            false, start.elapsed(), Some(format!("Unexpected: {}", trimmed))))
+            true, start.elapsed(), None));
     }
+
+    let cmd = format!("AUTH {} {}\r\n", credential.username, credential.password);
+    let resp = try_cmd(reader, writer, &cmd).await?;
+    if resp.starts_with("+OK") {
+        return Ok(AuthResult::new(target.host.clone(), target.port, "redis",
+            credential.username.clone(), credential.password.clone(),
+            true, start.elapsed(), None));
+    }
+
+    if resp.contains("wrong number of arguments") {
+        let cmd = format!("AUTH {}\r\n", credential.password);
+        let resp = try_cmd(reader, writer, &cmd).await?;
+        if resp.starts_with("+OK") {
+            return Ok(AuthResult::new(target.host.clone(), target.port, "redis",
+                credential.username.clone(), credential.password.clone(),
+                true, start.elapsed(), None));
+        }
+        return Ok(AuthResult::new(target.host.clone(), target.port, "redis",
+            credential.username.clone(), credential.password.clone(),
+            false, start.elapsed(), Some(resp)));
+    }
+
+    Ok(AuthResult::new(target.host.clone(), target.port, "redis",
+        credential.username.clone(), credential.password.clone(),
+        false, start.elapsed(), Some(resp)))
 }
 
 #[async_trait]
@@ -71,8 +93,12 @@ impl Protocol for RedisProtocol {
             let stream = match proxy {
                 Some(p) => p.tcp_connect(&addr, timeout_dur).await
                     .map_err(|e| format!("Proxy connect: {}", e))?,
-                None => TcpStream::connect(&addr).await
-                    .map_err(|e| format!("Connect: {}", e))?,
+                None => {
+                    let s = TcpStream::connect(&addr).await
+                        .map_err(|e| format!("Connect: {}", e))?;
+                    s.set_nodelay(true).ok();
+                    s
+                },
             };
 
             if use_tls {
@@ -80,26 +106,72 @@ impl Protocol for RedisProtocol {
                     NativeTlsConnector::builder().build()
                         .map_err(|e| format!("TLS build: {}", e))?
                 );
-                let mut tls_stream = connector.connect(&target.host, stream).await
+                let tls_stream = connector.connect(&target.host, stream).await
                     .map_err(|e| format!("TLS connect: {}", e))?;
 
-                let cmd = format!("AUTH {} {}\r\n", credential.username, credential.password);
-                tls_stream.write_all(cmd.as_bytes()).await
-                    .map_err(|e| format!("AUTH cmd: {}", e))?;
-                tls_stream.flush().await.ok();
+                let (r, w) = tokio::io::split(tls_stream);
+                let mut reader = BufReader::new(r);
+                let mut writer = w;
 
-                let mut buf = vec![0u8; 4096];
-                let n = tls_stream.read(&mut buf).await
-                    .map_err(|e| format!("Read resp: {}", e))?;
-                let trimmed = String::from_utf8_lossy(&buf[..n]).trim().to_string();
-                if trimmed.starts_with("+OK") {
+                let resp = {
+                    let cmd = "PING\r\n";
+                    writer.write_all(cmd.as_bytes()).await
+                        .map_err(|e| format!("Write cmd: {}", e))?;
+                    writer.flush().await.ok();
+                    let mut buf = String::new();
+                    reader.read_line(&mut buf).await
+                        .map_err(|e| format!("Read resp: {}", e))?;
+                    buf.trim().to_string()
+                };
+
+                if resp == "+PONG" {
                     return Ok(AuthResult::new(target.host.clone(), target.port, "redis",
                         credential.username.clone(), credential.password.clone(),
                         true, start.elapsed(), None));
                 }
+
+                let resp = {
+                    let cmd = format!("AUTH {} {}\r\n", credential.username, credential.password);
+                    writer.write_all(cmd.as_bytes()).await
+                        .map_err(|e| format!("Write cmd: {}", e))?;
+                    writer.flush().await.ok();
+                    let mut buf = String::new();
+                    reader.read_line(&mut buf).await
+                        .map_err(|e| format!("Read resp: {}", e))?;
+                    buf.trim().to_string()
+                };
+
+                if resp.starts_with("+OK") {
+                    return Ok(AuthResult::new(target.host.clone(), target.port, "redis",
+                        credential.username.clone(), credential.password.clone(),
+                        true, start.elapsed(), None));
+                }
+
+                if resp.contains("wrong number of arguments") {
+                    let resp = {
+                        let cmd = format!("AUTH {}\r\n", credential.password);
+                        writer.write_all(cmd.as_bytes()).await
+                            .map_err(|e| format!("Write cmd: {}", e))?;
+                        writer.flush().await.ok();
+                        let mut buf = String::new();
+                        reader.read_line(&mut buf).await
+                            .map_err(|e| format!("Read resp: {}", e))?;
+                        buf.trim().to_string()
+                    };
+
+                    if resp.starts_with("+OK") {
+                        return Ok(AuthResult::new(target.host.clone(), target.port, "redis",
+                            credential.username.clone(), credential.password.clone(),
+                            true, start.elapsed(), None));
+                    }
+                    return Ok(AuthResult::new(target.host.clone(), target.port, "redis",
+                        credential.username.clone(), credential.password.clone(),
+                        false, start.elapsed(), Some(resp)));
+                }
+
                 return Ok(AuthResult::new(target.host.clone(), target.port, "redis",
                     credential.username.clone(), credential.password.clone(),
-                    false, start.elapsed(), Some(trimmed)));
+                    false, start.elapsed(), Some(resp)));
             }
 
             let (reader, mut writer) = stream.into_split();

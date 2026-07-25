@@ -60,8 +60,12 @@ impl Protocol for VncProtocol {
             let mut stream = match proxy {
                 Some(p) => p.tcp_connect(&target.addr_string(), timeout_dur).await
                     .map_err(|e| format!("Connect: {}", e))?,
-                None => TcpStream::connect(target.addr_string()).await
-                    .map_err(|e| format!("Connect: {}", e))?,
+                None => {
+                    let s = TcpStream::connect(target.addr_string()).await
+                        .map_err(|e| format!("Connect: {}", e))?;
+                    s.set_nodelay(true).ok();
+                    s
+                },
             };
 
             let mut buf = [0u8; 12];

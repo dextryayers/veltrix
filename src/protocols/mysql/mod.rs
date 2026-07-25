@@ -78,8 +78,12 @@ impl Protocol for MySqlProtocol {
             let mut stream = match proxy {
                 Some(p) => p.tcp_connect(&addr, timeout_dur).await
                     .map_err(|e| format!("Proxy connect: {}", e))?,
-                None => TcpStream::connect(&addr).await
-                    .map_err(|e| format!("Connect: {}", e))?,
+                None => {
+                    let s = TcpStream::connect(&addr).await
+                        .map_err(|e| format!("Connect: {}", e))?;
+                    s.set_nodelay(true).ok();
+                    s
+                },
             };
 
             let payload = packet::read_packet(&mut stream).await?;
