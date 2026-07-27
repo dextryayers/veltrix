@@ -16,13 +16,57 @@ pub struct TelnetProtocol;
 
 const SUCCESS_INDICATORS: &[&str] = &[
     "last login", "$ ", "# ", "> ", "~$ ",
-    "welcome", "shell", "terminal",
+    "welcome", "shell",
 ];
 const FAILURE_INDICATORS: &[&str] = &[
     "incorrect", "invalid", "failed", "denied", "wrong",
     "error", "try again", "unauthorized", "rejected",
-    "bad", "failed login",
+    "bad", "failed login", "login failed",
 ];
+
+async fn read_with_negotiation(
+    stream: &mut tokio::net::TcpStream,
+    buf: &mut Vec<u8>,
+    timeout_dur: Duration,
+    stop_chars: &[char],
+) -> Result<usize, String> {
+    let start = tokio::time::Instant::now();
+    let mut total = 0usize;
+    loop {
+        let remaining = timeout_dur.saturating_sub(start.elapsed());
+        if remaining.is_zero() { break; }
+        let mut byte = [0u8; 1];
+        match timeout(remaining, stream.read(&mut byte)).await {
+            Ok(Ok(0)) => break,
+            Ok(Ok(_)) => {
+                if byte[0] == 255 {
+                    let mut iac = [0u8; 2];
+                    if stream.read_exact(&mut iac).await.is_ok() {
+                        match iac[0] {
+                            253 | 251 => {
+                                let resp = [255, if iac[0] == 253 { 252 } else { 254 }, iac[1]];
+                                stream.write_all(&resp).await.ok();
+                            }
+                            _ => {}
+                        }
+                    }
+                } else {
+                    if total < buf.len() {
+                        buf[total] = byte[0];
+                    }
+                    total += 1;
+                    let c = byte[0] as char;
+                    if stop_chars.contains(&c) {
+                        break;
+                    }
+                }
+            }
+            Ok(Err(_)) => break,
+            Err(_) => break,
+        }
+    }
+    Ok(total)
+}
 
 #[async_trait]
 impl Protocol for TelnetProtocol {
@@ -50,44 +94,18 @@ impl Protocol for TelnetProtocol {
                     .map_err(|e| format!("Connect: {}", e))?,
             };
 
-            // Read initial data and handle telnet negotiation
             let mut buf = alloc_read_buf();
-            let banner_read = timeout(Duration::from_secs(2), async {
-                let mut total = 0usize;
-                loop {
-                    match stream.read(&mut buf[total..]).await {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            // Handle telnet negotiation
-                            let neg = negotiation::handle_telnet_negotiation(&buf[total..total + n]);
-                            if !neg.is_empty() {
-                                stream.write_all(&neg).await.ok();
-                            }
 
-                            total += n;
-                            // Check for prompt characters in received data
-                            let data = String::from_utf8_lossy(&buf[..total]);
-                            let data_lower = data.to_lowercase();
-                            if data_lower.contains(':') || data_lower.contains("login:")
-                                || data_lower.contains("username:")
-                                || data_lower.contains("password:")
-                                || data_lower.contains("user:")
-                            {
-                                break;
-                            }
-                            if total >= buf.len() { break; }
-                        }
-                        Err(_) => break,
-                    }
-                }
-                Ok::<usize, String>(total)
-            }).await.unwrap_or(Ok(0)).unwrap_or(0);
+            // Wait for login prompt (max 3s, stop at ':' or "login" or "user")
+            let banner_len = read_with_negotiation(
+                &mut stream, &mut buf, Duration::from_secs(3), &[':'],
+            ).await.map_err(|e| e)?;
 
-            let initial = String::from_utf8_lossy(&buf[..banner_read]);
+            let initial = String::from_utf8_lossy(&buf[..banner_len]);
             let initial_lower = initial.to_lowercase();
 
-            // Check if we got a password prompt directly (no login needed)
             if initial_lower.contains("password:") {
+                // Direct password-only prompt
                 stream.write_all(format!("{}\r\n", credential.password).as_bytes()).await.map_err(|e| e.to_string())?;
                 stream.flush().await.map_err(|e| e.to_string())?;
             } else {
@@ -95,46 +113,38 @@ impl Protocol for TelnetProtocol {
                 stream.write_all(format!("{}\r\n", credential.username).as_bytes()).await.map_err(|e| e.to_string())?;
                 stream.flush().await.map_err(|e| e.to_string())?;
 
-                tokio::time::sleep(Duration::from_millis(200)).await;
-
-                // Wait for password prompt
+                // Wait for password prompt (max 1.5s, stop at ':' or "assword")
                 let mut pw_buf = alloc_read_buf();
-                let _pw_read = timeout(Duration::from_secs(2), async {
-                    let mut total = 0usize;
-                    loop {
-                        match stream.read(&mut pw_buf[total..]).await {
-                            Ok(0) => break,
-                            Ok(n) => {
-                                total += n;
-                                if total >= pw_buf.len() { break; }
-                                let data = String::from_utf8_lossy(&pw_buf[..total]);
-                                if data.contains(':') || data.contains("assword") {
-                                    break;
-                                }
-                            }
-                            Err(_) => break,
-                        }
-                    }
-                    Ok::<usize, String>(total)
-                }).await.unwrap_or(Ok(0)).unwrap_or(0);
+                let pw_len = read_with_negotiation(
+                    &mut stream, &mut pw_buf, Duration::from_millis(1500), &[':'],
+                ).await.map_err(|e| e)?;
+
+                let pw_prompt = String::from_utf8_lossy(&pw_buf[..pw_len]);
+                if !pw_prompt.to_lowercase().contains("assword") && !pw_prompt.contains(':') {
+                    // No password prompt detected, might be on wrong path
+                    return Ok(AuthResult::new(target.host.clone(), target.port, "telnet",
+                        credential.username.clone(), credential.password.clone(),
+                        false, start.elapsed(), Some("No password prompt".into())));
+                }
 
                 stream.write_all(format!("{}\r\n", credential.password).as_bytes()).await.map_err(|e| e.to_string())?;
                 stream.flush().await.map_err(|e| e.to_string())?;
             }
 
-            // Read auth response - collect all data with timeout
+            // Read response (max 2s)
             let mut resp = String::new();
             let mut resp_buf = alloc_read_buf();
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
             loop {
                 let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
                 if remaining.is_zero() { break; }
                 match timeout(remaining, stream.read(&mut resp_buf)).await {
                     Ok(Ok(n)) if n > 0 => {
-                        resp.push_str(&String::from_utf8_lossy(&resp_buf[..n]));
+                        // Filter IAC bytes from response
+                        let clean: Vec<u8> = resp_buf[..n].iter().copied().filter(|&b| b != 255).collect();
+                        resp.push_str(&String::from_utf8_lossy(&clean));
                         let resp_lower = resp.to_lowercase();
 
-                        // Check for success indicators
                         let has_success = SUCCESS_INDICATORS.iter().any(|s| resp_lower.contains(s));
                         let has_failure = FAILURE_INDICATORS.iter().any(|s| resp_lower.contains(s));
 

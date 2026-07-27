@@ -1,7 +1,8 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering, AtomicU64};
 use std::time::Duration;
-use tokio::sync::{Semaphore, mpsc};
+use tokio::sync::{Semaphore, mpsc, Mutex};
+use tokio::task::JoinSet;
 
 use super::config::AttackConfig;
 use super::credential::Credential;
@@ -11,8 +12,8 @@ use crate::protocols::get_protocol;
 use crate::proxy::ProxyConfig;
 
 pub struct WorkerTask {
-    pub target: Target,
-    pub credential: Credential,
+    pub target: Arc<Target>,
+    pub credential: Arc<Credential>,
     pub attempt_index: u64,
 }
 
@@ -23,18 +24,20 @@ pub struct WorkerPool {
     timeout: Duration,
     stop_on_first: bool,
     proxies: Vec<ProxyConfig>,
-    proxy_failures: Arc<std::sync::Mutex<Vec<u64>>>,
-    skipped_users: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
-    tasks: Vec<tokio::task::JoinHandle<()>>,
-    result_tx: mpsc::UnboundedSender<(AuthResult, bool)>,
-    result_rx: mpsc::UnboundedReceiver<(AuthResult, bool)>,
-    total_submitted: Arc<std::sync::atomic::AtomicU64>,
+    proxy_failures: Arc<Mutex<Vec<u64>>>,
+    skipped_users: Arc<Mutex<std::collections::HashSet<String>>>,
+    tasks: JoinSet<()>,
+    result_tx: mpsc::Sender<(AuthResult, bool)>,
+    result_rx: mpsc::Receiver<(AuthResult, bool)>,
+    total_submitted: Arc<AtomicU64>,
 }
+
+const CHANNEL_BUF: usize = 8192;
 
 impl WorkerPool {
     pub fn new(config: &AttackConfig, running: Arc<AtomicBool>, proxies: Vec<ProxyConfig>) -> Self {
-        let proxy_failures = Arc::new(std::sync::Mutex::new(vec![0u64; proxies.len().max(1)]));
-        let (tx, rx) = mpsc::unbounded_channel();
+        let proxy_failures = Arc::new(Mutex::new(vec![0u64; proxies.len().max(1)]));
+        let (tx, rx) = mpsc::channel(CHANNEL_BUF);
         WorkerPool {
             semaphore: Arc::new(Semaphore::new(config.threads)),
             running,
@@ -43,11 +46,11 @@ impl WorkerPool {
             stop_on_first: config.stop_on_first,
             proxies,
             proxy_failures,
-            skipped_users: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-            tasks: Vec::new(),
+            skipped_users: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            tasks: JoinSet::new(),
             result_tx: tx,
             result_rx: rx,
-            total_submitted: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            total_submitted: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -56,7 +59,7 @@ impl WorkerPool {
             return;
         }
 
-        let _submitted = self.total_submitted.fetch_add(1, Ordering::Relaxed);
+        self.total_submitted.fetch_add(1, Ordering::Relaxed);
 
         let semaphore = Arc::clone(&self.semaphore);
         let running = Arc::clone(&self.running);
@@ -71,25 +74,17 @@ impl WorkerPool {
         let credential = task.credential;
         let result_tx = self.result_tx.clone();
 
-        let handle = tokio::spawn(async move {
-            let _permit = semaphore.acquire().await.unwrap();
-            let mut last_result = None;
-            let mut current_proxy = proxy;
-
-            let is_skipped = {
-                let sk = skipped.lock().unwrap();
-                sk.contains(&credential.username)
-            };
-            if is_skipped {
+        self.tasks.spawn(async move {
+            if is_skipped(&skipped, &credential.username).await {
                 let _ = result_tx.send((
                     AuthResult::new(
-                        target.host, target.port, &target.protocol,
-                        credential.username, credential.password,
+                        target.host.clone(), target.port, &target.protocol,
+                        credential.username.clone(), credential.password.clone(),
                         false, Duration::ZERO,
                         Some("Skipped (account locked)".into()),
                     ),
                     stop_early,
-                ));
+                )).await;
                 return;
             }
 
@@ -98,25 +93,32 @@ impl WorkerPool {
                 None => {
                     let _ = result_tx.send((
                         AuthResult::new(
-                        target.host, target.port, &target.protocol,
-                        credential.username, credential.password,
+                        target.host.clone(), target.port, &target.protocol,
+                        credential.username.clone(), credential.password.clone(),
                             false, Duration::ZERO,
                             Some(format!("Unsupported protocol: {}", target.protocol)),
                         ),
                         stop_early,
-                    ));
+                    )).await;
                     return;
                 }
             };
+
+            let mut last_result = None;
+            let mut current_proxy = proxy;
 
             for attempt in 0..=retries {
                 if !running.load(Ordering::Relaxed) {
                     break;
                 }
 
-                let result = handler
-                    .authenticate(&target, &credential, timeout, &current_proxy)
-                    .await;
+                // Acquire semaphore permit only during authenticate call
+                let result = {
+                    let _permit = semaphore.acquire().await.unwrap();
+                    handler
+                        .authenticate(&*target, &*credential, timeout, &current_proxy)
+                        .await
+                };
 
                 let classified = crate::utils::patterns::classify_error(
                     result.error.as_deref(), result.success,
@@ -128,14 +130,14 @@ impl WorkerPool {
                 }
 
                 if crate::utils::patterns::should_skip_user(&classified) {
-                    skipped.lock().unwrap().insert(credential.username.clone());
+                    add_skipped(&skipped, &credential.username).await;
                     let _ = result_tx.send((
                         AuthResult {
                             error: Some(format!("Account locked: {}", classified.message)),
                             ..result
                         },
                         stop_early,
-                    ));
+                    )).await;
                     return;
                 }
 
@@ -145,11 +147,7 @@ impl WorkerPool {
                 }
 
                 if crate::utils::patterns::should_rotate_proxy(&classified) && current_proxy.is_some() {
-                    if let Ok(mut fails) = proxy_fails.lock() {
-                        if current_proxy_idx < fails.len() {
-                            fails[current_proxy_idx] += 1;
-                        }
-                    }
+                    inc_proxy_fail(&proxy_fails, current_proxy_idx).await;
                     current_proxy = None;
                 }
 
@@ -158,20 +156,13 @@ impl WorkerPool {
                     break;
                 }
 
-                let backoff = crate::utils::patterns::compute_backoff(attempt);
-                tokio::time::sleep(backoff).await;
+                tokio::time::sleep(crate::utils::patterns::compute_backoff(attempt)).await;
             }
 
             if let Some(r) = last_result {
-                let _ = result_tx.send((r, stop_early));
+                let _ = result_tx.send((r, stop_early)).await;
             }
         });
-
-        self.tasks.push(handle);
-    }
-
-    pub fn result_receiver(&mut self) -> &mut mpsc::UnboundedReceiver<(AuthResult, bool)> {
-        &mut self.result_rx
     }
 
     pub fn try_recv_result(&mut self) -> Option<(AuthResult, bool)> {
@@ -186,27 +177,16 @@ impl WorkerPool {
         self.total_submitted.load(Ordering::Relaxed)
     }
 
-    pub fn tasks_pending(&self) -> usize {
-        self.tasks.len()
-    }
-
-    pub async fn drain_results(&mut self) -> Vec<(AuthResult, bool)> {
-        let mut results = Vec::new();
-        while let Some(r) = self.result_rx.recv().await {
-            results.push(r);
-        }
-        results
-    }
-
     pub async fn wait_complete(&mut self) {
-        let handles: Vec<_> = self.tasks.drain(..).collect();
-        for h in handles {
-            let _ = h.await;
+        while self.tasks.join_next().await.is_some() {}
+        // Drain any remaining results
+        while let Ok(r) = self.result_rx.try_recv() {
+            drop(r);
         }
     }
 
     pub async fn collect_all(&mut self) -> Vec<(AuthResult, bool)> {
-        self.wait_complete().await;
+        while self.tasks.join_next().await.is_some() {}
         let mut results = Vec::new();
         while let Ok(r) = self.result_rx.try_recv() {
             results.push(r);
@@ -220,5 +200,22 @@ impl WorkerPool {
         } else {
             Some(self.proxies[index % self.proxies.len()].clone())
         }
+    }
+}
+
+async fn is_skipped(skipped: &Arc<Mutex<std::collections::HashSet<String>>>, username: &str) -> bool {
+    let sk = skipped.lock().await;
+    sk.contains(username)
+}
+
+async fn add_skipped(skipped: &Arc<Mutex<std::collections::HashSet<String>>>, username: &str) {
+    let mut sk = skipped.lock().await;
+    sk.insert(username.to_string());
+}
+
+async fn inc_proxy_fail(proxy_fails: &Arc<Mutex<Vec<u64>>>, idx: usize) {
+    let mut fails = proxy_fails.lock().await;
+    if idx < fails.len() {
+        fails[idx] += 1;
     }
 }

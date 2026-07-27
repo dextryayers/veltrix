@@ -234,7 +234,7 @@ impl Protocol for SnmpProtocol {
 
             let mut buf = alloc_read_buf();
             let n = tokio::time::timeout(
-                Duration::from_secs(5),
+                timeout_dur,
                 socket.recv(&mut buf),
             ).await
                 .map_err(|_| "Timeout waiting for SNMP response".to_string())?

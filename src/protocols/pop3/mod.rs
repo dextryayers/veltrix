@@ -1,8 +1,6 @@
 use async_trait::async_trait;
 use native_tls::TlsConnector as NativeTlsConnector;
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_native_tls::TlsConnector;
 
@@ -10,18 +8,15 @@ use crate::core::credential::Credential;
 use crate::core::result::AuthResult;
 use crate::core::target::Target;
 use crate::proxy::ProxyConfig;
+use super::tcp::{connect_optimized, tune_tcp};
+use super::conn;
 use super::Protocol;
-use super::tcp::{connect_optimized, tune_tcp, alloc_read_buf};
 
 pub struct Pop3Protocol;
 
 async fn pop3_auth_tls(
-    host: &str,
-    port: u16,
-    username: &str,
-    password: &str,
-    start: Instant,
-    stream: TcpStream,
+    host: &str, port: u16, username: &str, password: &str,
+    start: Instant, stream: tokio::net::TcpStream,
 ) -> Result<AuthResult, String> {
     let connector = TlsConnector::from(
         NativeTlsConnector::builder().build()
@@ -30,161 +25,93 @@ async fn pop3_auth_tls(
     let mut tls_stream = connector.connect(host, stream).await
         .map_err(|e| format!("TLS connect: {}", e))?;
 
-    tls_stream.write_all(format!("USER {}\r\n", username).as_bytes()).await
-        .map_err(|e| format!("USER cmd: {}", e))?;
-    tls_stream.flush().await.ok();
-
-    let mut buf = alloc_read_buf();
-    let n = tls_stream.read(&mut buf).await
-        .map_err(|e| format!("USER resp: {}", e))?;
-    let user_resp = String::from_utf8_lossy(&buf[..n]);
+    let mut buf = Vec::new();
+    conn::write_line_tls(&mut tls_stream, &format!("USER {}\r\n", username)).await?;
+    let user_resp = conn::read_line_tls(&mut tls_stream, &mut buf).await?;
     if !user_resp.starts_with("+OK") {
-        return Ok(AuthResult::new(
-            host.to_string(), port, "pop3",
+        return Ok(AuthResult::new(host.to_string(), port, "pop3",
             username.to_string(), password.to_string(),
-            false, start.elapsed(), Some(format!("User rejected: {}", user_resp.trim())),
-        ));
+            false, start.elapsed(), Some(format!("User rejected: {}", user_resp))));
     }
 
-    tls_stream.write_all(format!("PASS {}\r\n", password).as_bytes()).await
-        .map_err(|e| format!("PASS cmd: {}", e))?;
-    tls_stream.flush().await.ok();
-
-    let mut buf = alloc_read_buf();
-    let n = tls_stream.read(&mut buf).await
-        .map_err(|e| format!("PASS resp: {}", e))?;
-    let pass_resp = String::from_utf8_lossy(&buf[..n]);
+    conn::write_line_tls(&mut tls_stream, &format!("PASS {}\r\n", password)).await?;
+    let pass_resp = conn::read_line_tls(&mut tls_stream, &mut buf).await?;
     let success = pass_resp.starts_with("+OK");
 
-    Ok(AuthResult::new(
-        host.to_string(), port, "pop3",
+    Ok(AuthResult::new(host.to_string(), port, "pop3",
         username.to_string(), password.to_string(),
         success, start.elapsed(),
-        if success { None } else { Some(pass_resp.trim().to_string()) },
-    ))
+        if success { None } else { Some(pass_resp) }))
 }
 
 async fn pop3_auth_plain(
-    host: &str,
-    port: u16,
-    username: &str,
-    password: &str,
-    start: Instant,
-    stream: TcpStream,
+    host: &str, port: u16, username: &str, password: &str,
+    start: Instant, mut stream: tokio::net::TcpStream,
 ) -> Result<AuthResult, String> {
-    let mut buf = alloc_read_buf();
+    let mut buf = Vec::new();
 
-    stream.readable().await.ok();
-    let n = stream.try_read(&mut buf).unwrap_or(0);
-    let banner = String::from_utf8_lossy(&buf[..n]);
+    let banner = conn::read_crlf_line(&mut stream, &mut buf).await?;
     if !banner.starts_with("+OK") {
-        return Ok(AuthResult::new(
-            host.to_string(), port, "pop3",
+        return Ok(AuthResult::new(host.to_string(), port, "pop3",
             username.to_string(), password.to_string(),
-            false, start.elapsed(), Some(format!("Bad banner: {}", banner.trim())),
-        ));
+            false, start.elapsed(), Some(format!("Bad banner: {}", banner))));
     }
 
-    // Try STLS (STARTTLS) for POP3
-    stream.writable().await.ok();
-    stream.try_write(b"STLS\r\n").ok();
-    buf.clear();
-    stream.readable().await.ok();
-    let n = stream.try_read(&mut buf).unwrap_or(0);
-    let stls_resp = String::from_utf8_lossy(&buf[..n]);
+    conn::write_line(&mut stream, "STLS\r\n").await?;
+    let stls_resp = conn::read_crlf_line(&mut stream, &mut buf).await?;
     if stls_resp.starts_with("+OK") {
         let connector = TlsConnector::from(
             NativeTlsConnector::builder().build()
                 .map_err(|e| format!("TLS build: {}", e))?
         );
-        match connector.connect(host, stream).await {
+        return match connector.connect(host, stream).await {
             Ok(mut tls_stream) => {
-                tls_stream.write_all(format!("USER {}\r\n", username).as_bytes()).await
-                    .map_err(|e| format!("USER cmd: {}", e))?;
-                tls_stream.flush().await.ok();
-                let mut tb = alloc_read_buf();
-                let n = tls_stream.read(&mut tb).await
-                    .map_err(|e| format!("USER resp: {}", e))?;
-                let user_resp = String::from_utf8_lossy(&tb[..n]);
+                let mut tb = Vec::new();
+                conn::write_line_tls(&mut tls_stream, &format!("USER {}\r\n", username)).await?;
+                let user_resp = conn::read_line_tls(&mut tls_stream, &mut tb).await?;
                 if !user_resp.starts_with("+OK") {
-                    return Ok(AuthResult::new(
-                        host.to_string(), port, "pop3",
+                    return Ok(AuthResult::new(host.to_string(), port, "pop3",
                         username.to_string(), password.to_string(),
-                        false, start.elapsed(), Some(format!("User rejected: {}", user_resp.trim())),
-                    ));
+                        false, start.elapsed(), Some(format!("User rejected: {}", user_resp))));
                 }
-
-                tls_stream.write_all(format!("PASS {}\r\n", password).as_bytes()).await
-                    .map_err(|e| format!("PASS cmd: {}", e))?;
-                tls_stream.flush().await.ok();
-                let n = tls_stream.read(&mut tb).await
-                    .map_err(|e| format!("PASS resp: {}", e))?;
-                let pass_resp = String::from_utf8_lossy(&tb[..n]);
+                conn::write_line_tls(&mut tls_stream, &format!("PASS {}\r\n", password)).await?;
+                let pass_resp = conn::read_line_tls(&mut tls_stream, &mut tb).await?;
                 let success = pass_resp.starts_with("+OK");
-
-                return Ok(AuthResult::new(
-                    host.to_string(), port, "pop3",
+                Ok(AuthResult::new(host.to_string(), port, "pop3",
                     username.to_string(), password.to_string(),
                     success, start.elapsed(),
-                    if success { None } else { Some(pass_resp.trim().to_string()) },
-                ));
+                    if success { None } else { Some(pass_resp) }))
             }
-            Err(_) => return Ok(AuthResult::new(
-                host.to_string(), port, "pop3",
+            Err(_) => Ok(AuthResult::new(host.to_string(), port, "pop3",
                 username.to_string(), password.to_string(),
-                false, start.elapsed(), Some("STLS upgrade failed".into()),
-            )),
-        }
+                false, start.elapsed(), Some("STLS upgrade failed".into()))),
+        };
     }
 
-    let (reader, mut writer) = stream.into_split();
-    let mut buf_reader = BufReader::new(reader);
-    let mut buf = alloc_read_buf();
-
-    writer.write_all(format!("USER {}\r\n", username).as_bytes()).await
-        .map_err(|e| format!("USER cmd: {}", e))?;
-    writer.flush().await.ok();
-    buf.clear();
-    buf_reader.read_until(b'\n', &mut buf).await
-        .map_err(|e| format!("USER resp: {}", e))?;
-    let user_resp = String::from_utf8_lossy(&buf);
+    conn::write_line(&mut stream, &format!("USER {}\r\n", username)).await?;
+    let user_resp = conn::read_crlf_line(&mut stream, &mut buf).await?;
     if !user_resp.starts_with("+OK") {
-        let _ = writer.write_all(b"QUIT\r\n").await;
-        return Ok(AuthResult::new(
-            host.to_string(), port, "pop3",
+        conn::write_line(&mut stream, "QUIT\r\n").await.ok();
+        return Ok(AuthResult::new(host.to_string(), port, "pop3",
             username.to_string(), password.to_string(),
-            false, start.elapsed(), Some(format!("User rejected: {}", user_resp.trim())),
-        ));
+            false, start.elapsed(), Some(format!("User rejected: {}", user_resp))));
     }
 
-    writer.write_all(format!("PASS {}\r\n", password).as_bytes()).await
-        .map_err(|e| format!("PASS cmd: {}", e))?;
-    writer.flush().await.ok();
-    buf.clear();
-    buf_reader.read_until(b'\n', &mut buf).await
-        .map_err(|e| format!("PASS resp: {}", e))?;
-    let pass_resp = String::from_utf8_lossy(&buf);
+    conn::write_line(&mut stream, &format!("PASS {}\r\n", password)).await?;
+    let pass_resp = conn::read_crlf_line(&mut stream, &mut buf).await?;
     let success = pass_resp.starts_with("+OK");
+    conn::write_line(&mut stream, "QUIT\r\n").await.ok();
 
-    let _ = writer.write_all(b"QUIT\r\n").await;
-
-    Ok(AuthResult::new(
-        host.to_string(), port, "pop3",
+    Ok(AuthResult::new(host.to_string(), port, "pop3",
         username.to_string(), password.to_string(),
         success, start.elapsed(),
-        if success { None } else { Some(pass_resp.trim().to_string()) },
-    ))
+        if success { None } else { Some(pass_resp) }))
 }
 
 #[async_trait]
 impl Protocol for Pop3Protocol {
-    fn name(&self) -> &'static str {
-        "pop3"
-    }
-
-    fn default_port(&self) -> u16 {
-        110
-    }
+    fn name(&self) -> &'static str { "pop3" }
+    fn default_port(&self) -> u16 { 110 }
 
     async fn authenticate(
         &self,
@@ -195,7 +122,11 @@ impl Protocol for Pop3Protocol {
     ) -> AuthResult {
         let start = Instant::now();
         let addr = target.addr_string();
-        let use_tls = target.port == 995;
+        let host = target.host.clone();
+        let port = target.port;
+        let username = credential.username.clone();
+        let password = credential.password.clone();
+        let use_tls = port == 995;
 
         match timeout(timeout_dur, async {
             let stream = match proxy {
@@ -209,17 +140,9 @@ impl Protocol for Pop3Protocol {
             };
 
             if use_tls {
-                pop3_auth_tls(
-                    &target.host, target.port,
-                    &credential.username, &credential.password,
-                    start, stream,
-                ).await
+                pop3_auth_tls(&host, port, &username, &password, start, stream).await
             } else {
-                pop3_auth_plain(
-                    &target.host, target.port,
-                    &credential.username, &credential.password,
-                    start, stream,
-                ).await
+                pop3_auth_plain(&host, port, &username, &password, start, stream).await
             }
         }).await {
             Ok(Ok(r)) => r,

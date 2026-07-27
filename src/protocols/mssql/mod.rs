@@ -174,30 +174,29 @@ impl Protocol for MssqlProtocol {
                 return Err("Empty response".into());
             }
 
+            // Parse TDS response tokens for success/failure
             let msg_type = resp[0];
-            if msg_type == 0xad || msg_type == 0x04 || msg_type == 0x79 {
-                let has_error = resp.windows(3).any(|w| w == &[0xac, 0x00, 0x00])
-                    || resp.windows(2).any(|w| w == &[0x05, 0x00]);
+            // LOGINACK (0xab) or DONE (0x81/0xfd) tokens indicate auth result
+            let has_loginack = resp.contains(&0xab);
+            let has_done_success = resp.contains(&0x81);
+            let has_error_token = resp.windows(2).any(|w| w == &[0xfd, 0x00]);
 
-                if has_error {
-                    Ok(AuthResult::new(
-                        target.host.clone(), target.port, "mssql",
-                        credential.username.clone(), credential.password.clone(),
-                        false, start.elapsed(), Some("Login denied".into()),
-                    ))
-                } else {
-                    Ok(AuthResult::new(
-                        target.host.clone(), target.port, "mssql",
-                        credential.username.clone(), credential.password.clone(),
-                        true, start.elapsed(), None,
-                    ))
-                }
+            let success = (msg_type == 0xab || msg_type == 0x81 || has_loginack || has_done_success)
+                && !has_error_token
+                && !resp.windows(3).any(|w| w == &[0xac, 0x00, 0x00])
+                && !resp.windows(2).any(|w| w == &[0x05, 0x00]);
+
+            if success {
+                Ok(AuthResult::new(
+                    target.host.clone(), target.port, "mssql",
+                    credential.username.clone(), credential.password.clone(),
+                    true, start.elapsed(), None,
+                ))
             } else {
                 Ok(AuthResult::new(
                     target.host.clone(), target.port, "mssql",
                     credential.username.clone(), credential.password.clone(),
-                    false, start.elapsed(),
-                    Some(format!("Unexpected response: 0x{:02x}", msg_type)),
+                    false, start.elapsed(), Some("Login denied".into()),
                 ))
             }
         }).await {

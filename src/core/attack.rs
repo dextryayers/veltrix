@@ -241,7 +241,35 @@ impl AttackOrchestrator {
         let start_time = Utc::now();
 
         let targets = match Self::load_targets(&self.config).await {
-            Ok(t) => t,
+            Ok(mut t) => {
+                // Health check: parallel TCP probe to filter unreachable targets
+                let before = t.len();
+                if before > 10 {
+                    let sem = Arc::new(Semaphore::new(50));
+                    let mut handles = Vec::with_capacity(before);
+                    for target in t {
+                        let permit = Arc::clone(&sem);
+                        let addr = target.addr_string();
+                        let timeout_dur = std::time::Duration::from_secs(3);
+                        handles.push(async move {
+                            let _guard = permit.acquire().await;
+                            match tokio::time::timeout(timeout_dur, tokio::net::TcpStream::connect(&addr)).await {
+                                Ok(Ok(stream)) => {
+                                    drop(stream);
+                                    Some(target)
+                                }
+                                _ => None,
+                            }
+                        });
+                    }
+                    t = futures::future::join_all(handles).await.into_iter().filter_map(|x| x).collect();
+                    let dead = before - t.len();
+                    if dead > 0 {
+                        log::info!("Health check: {} targets alive, {} unreachable (skipped)", t.len(), dead);
+                    }
+                }
+                t
+            }
             Err(e) => {
                 log::error!("Failed to load targets: {}", e);
                 return AttackSummary {
@@ -280,6 +308,17 @@ impl AttackOrchestrator {
         };
         self.credentials = credentials;
         self.proxies = Self::load_proxies(&self.config);
+
+        // Deduplicate credentials
+        let before = self.credentials.len();
+        if before > 0 {
+            let mut seen = std::collections::HashSet::new();
+            self.credentials.retain(|c| seen.insert((c.username.clone(), c.password.clone())));
+            let removed = before - self.credentials.len();
+            if removed > 0 {
+                log::info!("Removed {} duplicate credentials", removed);
+            }
+        }
 
         if let Some(resume_path) = &self.config.resume_file {
             match SessionState::load(resume_path) {
@@ -334,8 +373,8 @@ impl AttackOrchestrator {
                 self.jitter.delay().await;
 
                 pool.submit(WorkerTask {
-                    target: target.clone(),
-                    credential: credential.clone(),
+                    target: Arc::new(target.clone()),
+                    credential: Arc::new(credential.clone()),
                     attempt_index: attempt_count,
                 });
 

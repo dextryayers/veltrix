@@ -1,15 +1,14 @@
 use async_trait::async_trait;
-use native_tls::TlsConnector as NativeTlsConnector;
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::AsyncReadExt;
 use tokio::time::timeout;
-use tokio_native_tls::TlsConnector;
 
 use crate::core::credential::Credential;
 use crate::core::result::AuthResult;
 use crate::core::target::Target;
 use crate::proxy::ProxyConfig;
-use super::tcp::{connect_optimized, tune_tcp, alloc_read_buf};
+use super::conn::{self, read_crlf_line, write_line, upgrade_to_tls, read_line_tls, write_line_tls};
+use super::tcp::alloc_read_buf;
 use super::Protocol;
 
 pub struct SmtpProtocol;
@@ -40,19 +39,14 @@ fn base64_encode(input: &str) -> String {
 }
 
 async fn ehlo(
-    reader: &mut BufReader<tokio::net::tcp::OwnedReadHalf>,
-    writer: &mut tokio::net::tcp::OwnedWriteHalf,
+    stream: &mut tokio::net::TcpStream,
+    buf: &mut Vec<u8>,
 ) -> Result<Vec<String>, String> {
-    let mut buf = Vec::new();
-    let ehlo = "EHLO veltrix\r\n";
-    writer.write_all(ehlo.as_bytes()).await.map_err(|e| format!("EHLO: {}", e))?;
-    writer.flush().await.ok();
+    write_line(stream, "EHLO veltrix\r\n").await?;
     let mut ok = false;
     let mut capabilities = Vec::new();
     loop {
-        buf.clear();
-        reader.read_until(b'\n', &mut buf).await.map_err(|e| format!("EHLO resp: {}", e))?;
-        let line = String::from_utf8_lossy(&buf).trim().to_string();
+        let line = read_crlf_line(stream, buf).await?;
         if line.starts_with("250") {
             ok = true;
             if let Some(cap) = line.strip_prefix("250-").or_else(|| line.strip_prefix("250 ")) {
@@ -69,15 +63,56 @@ async fn ehlo(
     Ok(capabilities)
 }
 
-#[async_trait]
-impl Protocol for SmtpProtocol {
-    fn name(&self) -> &'static str {
-        "smtp"
+async fn smtp_auth_login(
+    stream: &mut tokio::net::TcpStream,
+    user_b64: &str,
+    pass_b64: &str,
+    buf: &mut Vec<u8>,
+) -> Result<bool, String> {
+    write_line(stream, "AUTH LOGIN\r\n").await?;
+    let auth_resp = read_crlf_line(stream, buf).await?;
+    if !auth_resp.starts_with("334") {
+        return Err(format!("AUTH not supported: {}", auth_resp));
     }
 
-    fn default_port(&self) -> u16 {
-        25
+    write_line(stream, &format!("{}\r\n", user_b64)).await?;
+    let user_resp = read_crlf_line(stream, buf).await?;
+    if !user_resp.starts_with("334") {
+        return Err(format!("User rejected: {}", user_resp));
     }
+
+    write_line(stream, &format!("{}\r\n", pass_b64)).await?;
+    let pass_resp = read_crlf_line(stream, buf).await?;
+    Ok(pass_resp.starts_with("235"))
+}
+
+async fn smtp_auth_login_tls(
+    tls_stream: &mut tokio_native_tls::TlsStream<tokio::net::TcpStream>,
+    user_b64: &str,
+    pass_b64: &str,
+    buf: &mut Vec<u8>,
+) -> Result<bool, String> {
+    write_line_tls(tls_stream, "AUTH LOGIN\r\n").await?;
+    let auth_resp = read_line_tls(tls_stream, buf).await?;
+    if !auth_resp.starts_with("334") {
+        return Err(format!("AUTH not supported: {}", auth_resp));
+    }
+
+    write_line_tls(tls_stream, &format!("{}\r\n", user_b64)).await?;
+    let user_resp = read_line_tls(tls_stream, buf).await?;
+    if !user_resp.starts_with("334") {
+        return Err(format!("User rejected: {}", user_resp));
+    }
+
+    write_line_tls(tls_stream, &format!("{}\r\n", pass_b64)).await?;
+    let pass_resp = read_line_tls(tls_stream, buf).await?;
+    Ok(pass_resp.starts_with("235"))
+}
+
+#[async_trait]
+impl Protocol for SmtpProtocol {
+    fn name(&self) -> &'static str { "smtp" }
+    fn default_port(&self) -> u16 { 25 }
 
     async fn authenticate(
         &self,
@@ -88,210 +123,68 @@ impl Protocol for SmtpProtocol {
     ) -> AuthResult {
         let start = Instant::now();
         let addr = target.addr_string();
+        let user_b64 = base64_encode(&credential.username);
+        let pass_b64 = base64_encode(&credential.password);
 
-        let connect_result = match timeout(timeout_dur, async {
-            let stream = match proxy {
-                Some(p) => {
-                    let s = p.tcp_connect(&addr, timeout_dur).await
-                        .map_err(|e| format!("Proxy connect: {}", e))?;
-                    tune_tcp(&s);
-                    s
-                },
-                None => connect_optimized(&addr, timeout_dur).await
-                    .map_err(|e| format!("Connect: {}", e))?,
-            };
-
-            let (reader, mut writer) = stream.into_split();
-            let mut buf_reader = BufReader::new(reader);
+        let result = timeout(timeout_dur, async {
+            let mut stream = conn::tcp_connect(&addr, timeout_dur, proxy).await?;
             let mut buf = Vec::new();
 
-            buf_reader.read_until(b'\n', &mut buf).await
-                .map_err(|e| format!("Banner: {}", e))?;
-            let banner = String::from_utf8_lossy(&buf);
+            let banner = read_crlf_line(&mut stream, &mut buf).await?;
             if !banner.starts_with("220") {
                 return Ok(AuthResult::new(
                     target.host.clone(), target.port, "smtp",
                     credential.username.clone(), credential.password.clone(),
-                    false, start.elapsed(), Some(format!("Bad banner: {}", banner.trim())),
+                    false, start.elapsed(), Some(format!("Bad banner: {}", banner)),
                 ));
             }
 
-            let caps = ehlo(&mut buf_reader, &mut writer).await.map_err(|e| e)?;
+            let caps = ehlo(&mut stream, &mut buf).await?;
 
-            // Try STARTTLS if advertised
             let supports_starttls = caps.iter().any(|c| c == "STARTTLS");
-            let _tls_used = if supports_starttls && target.port != 465 {
-                let mut tls_buf = alloc_read_buf();
-                writer.write_all(b"STARTTLS\r\n").await.ok();
-                writer.flush().await.ok();
-                buf.clear();
-                buf_reader.read_until(b'\n', &mut buf).await.ok();
-                let starttls_resp = String::from_utf8_lossy(&buf);
+            if supports_starttls && target.port != 465 {
+                write_line(&mut stream, "STARTTLS\r\n").await?;
+                let starttls_resp = read_crlf_line(&mut stream, &mut buf).await?;
                 if starttls_resp.starts_with("220") {
-                    drop(buf_reader);
-                    drop(writer);
-                    let new_stream = match proxy {
-                        Some(p) => {
-                            let s = p.tcp_connect(&addr, timeout_dur).await
-                                .map_err(|e| format!("Proxy connect: {}", e))?;
-                            tune_tcp(&s);
-                            s
-                        },
-                        None => connect_optimized(&addr, timeout_dur).await
-                            .map_err(|e| format!("Connect: {}", e))?,
-                    };
-                    let connector = TlsConnector::from(
-                        NativeTlsConnector::builder().build()
-                            .map_err(|e| format!("TLS build: {}", e))?
-                    );
-                    let mut tls_stream = connector.connect(&target.host, new_stream).await
-                        .map_err(|e| format!("TLS connect: {}", e))?;
+                    let mut tls_stream = upgrade_to_tls(stream, &target.host).await?;
 
-                    use tokio::io::AsyncReadExt;
-                    tls_stream.read(&mut tls_buf).await.map_err(|e| format!("TLS banner: {}", e))?;
-                    let tls_banner = String::from_utf8_lossy(&tls_buf);
-                    if !tls_banner.starts_with("220") {
-                        return Ok(AuthResult::new(
-                            target.host.clone(), target.port, "smtp",
-                            credential.username.clone(), credential.password.clone(),
-                            false, start.elapsed(), Some(format!("TLS bad banner: {}", tls_banner.trim())),
-                        ));
-                    }
-
-                    let tls_ehlo = "EHLO veltrix\r\n";
-                    tls_stream.write_all(tls_ehlo.as_bytes()).await.ok();
-                    tls_stream.flush().await.ok();
+                    write_line_tls(&mut tls_stream, "EHLO veltrix\r\n").await?;
+                    let mut tls_buf = alloc_read_buf();
                     tls_buf.clear();
-                    tls_stream.read(&mut tls_buf).await.ok();
+                    tls_stream.read(&mut tls_buf).await.map_err(|e| format!("EHLO resp: {}", e))?;
 
-                    return smtp_tls_auth(tls_stream, &target, credential, start).await;
+                    let success = smtp_auth_login_tls(&mut tls_stream, &user_b64, &pass_b64, &mut buf).await.unwrap_or(false);
+                    return Ok(AuthResult::new(
+                        target.host.clone(), target.port, "smtp",
+                        credential.username.clone(), credential.password.clone(),
+                        success, start.elapsed(),
+                        if success { None } else { Some("Auth failed".into()) },
+                    ));
                 }
-                false
-            } else { false };
-
-            let auth_user = base64_encode(&credential.username);
-            let auth_pass = base64_encode(&credential.password);
-
-            buf.clear();
-            let auth_cmd = "AUTH LOGIN\r\n";
-            writer.write_all(auth_cmd.as_bytes()).await
-                .map_err(|e| format!("AUTH: {}", e))?;
-            writer.flush().await.ok();
-            buf_reader.read_until(b'\n', &mut buf).await
-                .map_err(|e| format!("AUTH resp: {}", e))?;
-            let auth_resp = String::from_utf8_lossy(&buf);
-
-            if !auth_resp.starts_with("334") {
-                let _ = writer.write_all(b"QUIT\r\n").await;
-                return Ok(AuthResult::new(
-                    target.host.clone(), target.port, "smtp",
-                    credential.username.clone(), credential.password.clone(),
-                    false, start.elapsed(), Some(format!("AUTH not supported: {}", auth_resp.trim())),
-                ));
             }
 
-            buf.clear();
-            writer.write_all(format!("{}\r\n", auth_user).as_bytes()).await
-                .map_err(|e| format!("AUTH user: {}", e))?;
-            writer.flush().await.ok();
-            buf_reader.read_until(b'\n', &mut buf).await
-                .map_err(|e| format!("AUTH user resp: {}", e))?;
-            let user_resp = String::from_utf8_lossy(&buf);
-            if !user_resp.starts_with("334") {
-                let _ = writer.write_all(b"QUIT\r\n").await;
-                return Ok(AuthResult::new(
-                    target.host.clone(), target.port, "smtp",
-                    credential.username.clone(), credential.password.clone(),
-                    false, start.elapsed(), Some(format!("User rejected: {}", user_resp.trim())),
-                ));
-            }
-
-            buf.clear();
-            writer.write_all(format!("{}\r\n", auth_pass).as_bytes()).await
-                .map_err(|e| format!("AUTH pass: {}", e))?;
-            writer.flush().await.ok();
-            buf_reader.read_until(b'\n', &mut buf).await
-                .map_err(|e| format!("AUTH pass resp: {}", e))?;
-            let pass_resp = String::from_utf8_lossy(&buf);
-            let success = pass_resp.starts_with("235");
-
-            let _ = writer.write_all(b"QUIT\r\n").await;
-
+            let success = smtp_auth_login(&mut stream, &user_b64, &pass_b64, &mut buf).await.unwrap_or(false);
+            write_line(&mut stream, "QUIT\r\n").await.ok();
             Ok(AuthResult::new(
                 target.host.clone(), target.port, "smtp",
                 credential.username.clone(), credential.password.clone(),
                 success, start.elapsed(),
-                if success { None } else { Some(pass_resp.trim().to_string()) },
+                if success { None } else { Some("Auth failed".into()) },
             ))
-        }).await {
-            Ok(r) => r,
-            Err(_) => Ok(AuthResult::new(
-                target.host.clone(), target.port, "smtp",
-                credential.username.clone(), credential.password.clone(),
-                false, start.elapsed(), Some("Timeout".into()),
-            )),
-        };
+        }).await;
 
-        match connect_result {
-            Ok(r) => r,
-            Err(e) => AuthResult::new(
+        match result {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => AuthResult::new(
                 target.host.clone(), target.port, "smtp",
                 credential.username.clone(), credential.password.clone(),
                 false, start.elapsed(), Some(e),
             ),
+            Err(_) => AuthResult::new(
+                target.host.clone(), target.port, "smtp",
+                credential.username.clone(), credential.password.clone(),
+                false, start.elapsed(), Some("Timeout".into()),
+            ),
         }
     }
-}
-
-async fn smtp_tls_auth(
-    mut tls_stream: tokio_native_tls::TlsStream<tokio::net::TcpStream>,
-    target: &Target,
-    credential: &Credential,
-    start: Instant,
-) -> Result<AuthResult, String> {
-    use tokio::io::AsyncReadExt;
-    let mut tls_buf = alloc_read_buf();
-
-    let auth_user = base64_encode(&credential.username);
-    let auth_pass = base64_encode(&credential.password);
-
-    tls_stream.write_all(b"AUTH LOGIN\r\n").await.map_err(|e| format!("AUTH: {}", e))?;
-    tls_stream.flush().await.ok();
-    tls_buf.clear();
-    tls_stream.read(&mut tls_buf).await.map_err(|e| format!("AUTH resp: {}", e))?;
-    let auth_resp = String::from_utf8_lossy(&tls_buf);
-    if !auth_resp.starts_with("334") {
-        return Ok(AuthResult::new(
-            target.host.clone(), target.port, "smtp",
-            credential.username.clone(), credential.password.clone(),
-            false, start.elapsed(), Some(format!("AUTH not supported: {}", auth_resp.trim())),
-        ));
-    }
-
-    tls_buf.clear();
-    tls_stream.write_all(format!("{}\r\n", auth_user).as_bytes()).await.map_err(|e| format!("AUTH user: {}", e))?;
-    tls_stream.flush().await.ok();
-    tls_stream.read(&mut tls_buf).await.map_err(|e| format!("AUTH user resp: {}", e))?;
-    let user_resp = String::from_utf8_lossy(&tls_buf);
-    if !user_resp.starts_with("334") {
-        return Ok(AuthResult::new(
-            target.host.clone(), target.port, "smtp",
-            credential.username.clone(), credential.password.clone(),
-            false, start.elapsed(), Some(format!("User rejected: {}", user_resp.trim())),
-        ));
-    }
-
-    tls_buf.clear();
-    tls_stream.write_all(format!("{}\r\n", auth_pass).as_bytes()).await.map_err(|e| format!("AUTH pass: {}", e))?;
-    tls_stream.flush().await.ok();
-    tls_stream.read(&mut tls_buf).await.map_err(|e| format!("AUTH pass resp: {}", e))?;
-    let pass_resp = String::from_utf8_lossy(&tls_buf);
-    let success = pass_resp.starts_with("235");
-
-    Ok(AuthResult::new(
-        target.host.clone(), target.port, "smtp",
-        credential.username.clone(), credential.password.clone(),
-        success, start.elapsed(),
-        if success { None } else { Some(pass_resp.trim().to_string()) },
-    ))
 }

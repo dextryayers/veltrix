@@ -12,43 +12,59 @@ use crate::proxy::ProxyConfig;
 use super::Protocol;
 use super::tcp::{connect_optimized, tune_tcp, alloc_read_buf};
 
+async fn read_response(
+    stream: &mut (impl AsyncReadExt + AsyncWriteExt + Unpin),
+    buf: &mut Vec<u8>,
+) -> Result<String, String> {
+    buf.clear();
+    let mut byte = [0u8; 1];
+    loop {
+        stream.read(&mut byte).await.map_err(|e| format!("Read: {}", e))?;
+        buf.push(byte[0]);
+        if byte[0] == b'\n' {
+            break;
+        }
+    }
+    Ok(String::from_utf8_lossy(buf).trim().to_string())
+}
+
+async fn write_command(
+    stream: &mut (impl AsyncReadExt + AsyncWriteExt + Unpin),
+    cmd: &str,
+) -> Result<(), String> {
+    stream.write_all(cmd.as_bytes()).await.map_err(|e| format!("Write: {}", e))?;
+    stream.flush().await.map_err(|e| format!("Flush: {}", e))
+}
+
 async fn ftp_auth_inner(
     stream: &mut (impl AsyncReadExt + AsyncWriteExt + Unpin),
-    host: &str, port: u16, credential: &Credential, start: Instant,
-) -> AuthResult {
+    host: &str, port: u16, username: &str, password: &str, start: Instant,
+) -> Result<AuthResult, String> {
     let mut buf = alloc_read_buf();
-    let n = stream.read(&mut buf).await.unwrap_or(0);
-    let banner = String::from_utf8_lossy(&buf[..n]);
+
+    let banner = read_response(stream, &mut buf).await?;
     if !banner.starts_with("220") {
-        return AuthResult::new(host.to_string(), port, "ftp",
-            credential.username.clone(), credential.password.clone(),
-            false, start.elapsed(), Some(format!("Bad banner: {}", banner.trim())));
+        return Ok(AuthResult::new(host.to_string(), port, "ftp",
+            username.to_string(), password.to_string(),
+            false, start.elapsed(), Some(format!("Bad banner: {}", banner))));
     }
 
-    let user_cmd = format!("USER {}\r\n", credential.username);
-    stream.write_all(user_cmd.as_bytes()).await.unwrap_or_default();
-    stream.flush().await.ok();
-    buf.clear();
-    let n = stream.read(&mut buf).await.unwrap_or(0);
-    let user_resp = String::from_utf8_lossy(&buf[..n]);
+    write_command(stream, &format!("USER {}\r\n", username)).await?;
+    let user_resp = read_response(stream, &mut buf).await?;
     if !user_resp.starts_with("2") && !user_resp.starts_with("3") {
-        return AuthResult::new(host.to_string(), port, "ftp",
-            credential.username.clone(), credential.password.clone(),
-            false, start.elapsed(), Some(format!("User rejected: {}", user_resp.trim())));
+        return Ok(AuthResult::new(host.to_string(), port, "ftp",
+            username.to_string(), password.to_string(),
+            false, start.elapsed(), Some(format!("User rejected: {}", user_resp))));
     }
 
-    buf.clear();
-    let pass_cmd = format!("PASS {}\r\n", credential.password);
-    stream.write_all(pass_cmd.as_bytes()).await.unwrap_or_default();
-    stream.flush().await.ok();
-    let n = stream.read(&mut buf).await.unwrap_or(0);
-    let pass_resp = String::from_utf8_lossy(&buf[..n]);
+    write_command(stream, &format!("PASS {}\r\n", password)).await?;
+    let pass_resp = read_response(stream, &mut buf).await?;
     let success = pass_resp.starts_with("230");
 
-    AuthResult::new(host.to_string(), port, "ftp",
-        credential.username.clone(), credential.password.clone(),
+    Ok(AuthResult::new(host.to_string(), port, "ftp",
+        username.to_string(), password.to_string(),
         success, start.elapsed(),
-        if success { None } else { Some(pass_resp.trim().to_string()) })
+        if success { None } else { Some(pass_resp) }))
 }
 
 pub struct FtpProtocol;
@@ -69,9 +85,11 @@ impl Protocol for FtpProtocol {
         let addr = target.addr_string();
         let host = target.host.clone();
         let port = target.port;
+        let username = credential.username.clone();
+        let password = credential.password.clone();
 
-        match timeout(timeout_dur, async {
-            let stream = match proxy {
+        let result = timeout(timeout_dur, async {
+            let mut stream = match proxy {
                 Some(p) => {
                     let s = p.tcp_connect(&addr, timeout_dur).await
                         .map_err(|e| format!("Proxy connect: {}", e))?;
@@ -81,30 +99,26 @@ impl Protocol for FtpProtocol {
                 None => connect_optimized(&addr, timeout_dur).await?,
             };
 
-            if target.port == 990 {
+            if port == 990 {
                 let connector = TlsConnector::from(
                     NativeTlsConnector::builder().build()
                         .map_err(|e| format!("TLS build: {}", e))?
                 );
                 let mut tls_stream = connector.connect(&host, stream).await
                     .map_err(|e| format!("TLS connect: {}", e))?;
-                return Ok(ftp_auth_inner(&mut tls_stream, &host, port, credential, start).await);
+                return ftp_auth_inner(&mut tls_stream, &host, port, &username, &password, start).await;
             }
 
-            let mut stream = stream;
             let mut buf = alloc_read_buf();
-            let n = stream.read(&mut buf).await.unwrap_or(0);
-            let banner = String::from_utf8_lossy(&buf[..n]);
+            let banner = read_response(&mut stream, &mut buf).await?;
             if !banner.starts_with("220") {
                 return Ok(AuthResult::new(host, port, "ftp",
-                    credential.username.clone(), credential.password.clone(),
-                    false, start.elapsed(), Some(format!("Bad banner: {}", banner.trim()))));
+                    username, password,
+                    false, start.elapsed(), Some(format!("Bad banner: {}", banner))));
             }
 
-            stream.write_all(b"AUTH TLS\r\n").await.unwrap_or_default();
-            buf.clear();
-            let n = stream.read(&mut buf).await.unwrap_or(0);
-            let auth_resp = String::from_utf8_lossy(&buf[..n]);
+            write_command(&mut stream, "AUTH TLS\r\n").await?;
+            let auth_resp = read_response(&mut stream, &mut buf).await?;
             if auth_resp.starts_with("234") {
                 let connector = TlsConnector::from(
                     NativeTlsConnector::builder().build()
@@ -112,19 +126,20 @@ impl Protocol for FtpProtocol {
                 );
                 match connector.connect(&host, stream).await {
                     Ok(mut tls_stream) => {
-                        return Ok(ftp_auth_inner(&mut tls_stream, &host, port, credential, start).await);
+                        return ftp_auth_inner(&mut tls_stream, &host, port, &username, &password, start).await;
                     }
                     Err(e) => {
                         return Ok(AuthResult::new(host, port, "ftp",
-                            credential.username.clone(), credential.password.clone(),
+                            username, password,
                             false, start.elapsed(), Some(format!("TLS upgrade failed: {}", e))));
                     }
                 }
             }
 
-            let result = ftp_auth_inner(&mut stream, &host, port, credential, start).await;
-            Ok(result)
-        }).await {
+            ftp_auth_inner(&mut stream, &host, port, &username, &password, start).await
+        }).await;
+
+        match result {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => AuthResult::new(
                 target.host.clone(), target.port, "ftp",
