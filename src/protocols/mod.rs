@@ -48,6 +48,7 @@ pub mod rexec;
 pub mod rlogin;
 pub mod squid;
 pub mod memcached;
+pub mod parser;
 
 use std::collections::HashSet;
 use async_trait::async_trait;

@@ -81,4 +81,32 @@ fastrand = "2.0"
 base64 = "0.22"
 dashmap = "6"
 
+# High-performance memory & concurrency
+smallvec = "1"
+bytes = "1"
+fxhash = "0.2"
+parking_lot = "0.12"
+
+# Parallel processing
+rayon = "1"
+
+# Memory-mapped I/O for instant wordlist loading
+memmap2 = "0.9"
+
+# Fast JSON parsing (SIMD-accelerated fallback)
+simd-json = { version = "0.14", features = ["serde_impl"] }
+
+# Binary protocol parsing
+nom = "7"
+ring = "0.17"
+blake3 = "1"
+
+# Additional serialization formats
+serde_yaml = "0.9"
+toml = "0.8"
+bincode = "1"
+
+# Terminal utilities (styled output)
+console = "0.15"
+
 [dev-dependencies]

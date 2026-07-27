@@ -68,6 +68,7 @@ pub enum OutputFormat {
     Csv,
     Plain,
     Html,
+    Yaml,
 }
 
 impl OutputFormat {
@@ -76,6 +77,7 @@ impl OutputFormat {
             "json" => OutputFormat::Json,
             "csv" => OutputFormat::Csv,
             "html" => OutputFormat::Html,
+            "yaml" | "yml" => OutputFormat::Yaml,
             _ => OutputFormat::Plain,
         }
     }

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use crate::utils::fx_map::DedupSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -122,7 +122,7 @@ impl AttackOrchestrator {
         let mut targets = parse_targets(&target_strings, &protocols, &ports);
 
         let before = targets.len();
-        let mut seen = HashSet::new();
+        let mut seen: DedupSet<(String, u16, String)> = DedupSet::with_capacity(targets.len());
         targets.retain(|t| seen.insert((t.host.clone(), t.port, t.protocol.clone())));
         if targets.len() < before {
             log::info!("Removed {} duplicate targets", before - targets.len());
@@ -284,7 +284,7 @@ impl AttackOrchestrator {
 
         let before = self.credentials.len();
         if before > 0 {
-            let mut seen = HashSet::new();
+            let mut seen: DedupSet<(String, String)> = DedupSet::with_capacity(self.credentials.len());
             self.credentials.retain(|c| seen.insert((c.username.clone(), c.password.clone())));
             let removed = before - self.credentials.len();
             if removed > 0 {

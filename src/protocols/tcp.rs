@@ -1,4 +1,3 @@
-use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::net::TcpStream;
 use socket2::{SockRef, TcpKeepalive};

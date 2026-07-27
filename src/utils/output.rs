@@ -396,6 +396,11 @@ fn write_output(format: &OutputFormat, csv_writer: Option<&mut csv::Writer<std::
                 let _ = w.flush();
             }
         }
+        OutputFormat::Yaml => {
+            if let Ok(yaml) = serde_yaml::to_string(result) {
+                let _ = writeln!(file, "---\n{}", yaml);
+            }
+        }
         _ => {
             let _ = writeln!(file, "{}", result.display());
         }

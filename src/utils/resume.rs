@@ -1,12 +1,8 @@
 use std::collections::HashSet;
 use std::path::Path;
-use hmac::{Hmac, Mac};
-use hmac::digest::KeyInit;
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
 use crate::core::error::AttackError;
-
-type HmacSha256 = Hmac<Sha256>;
+use crate::utils::crypto::hmac_sha256;
 
 // Fixed internal key for session file integrity verification
 const INTEGRITY_KEY: &[u8] = b"veltrix-session-integrity-v1-key-2024";
@@ -82,11 +78,7 @@ impl SessionState {
     }
 
     fn compute_hmac(data: &[u8]) -> Result<String, AttackError> {
-        let mut mac = HmacSha256::new_from_slice(INTEGRITY_KEY)
-            .map_err(|e| AttackError::internal(format!("HMAC init: {}", e)))?;
-        mac.update(data);
-        let result = mac.finalize();
-        let code = result.into_bytes();
+        let code = hmac_sha256(INTEGRITY_KEY, data);
         Ok(hex::encode(code))
     }
 

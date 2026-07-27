@@ -248,7 +248,7 @@ pub struct Cli {
     #[arg(short = 'o', long = "output", help = "Write results to FILE", value_name = "FILE", global = true)]
     pub output: Option<PathBuf>,
 
-    #[arg(short = 'f', long = "format", help = "Output format: plain, json, csv, html", default_value = "plain", value_name = "FMT", global = true)]
+    #[arg(short = 'f', long = "format", help = "Output format: plain, json, csv, html, yaml", default_value = "plain", value_name = "FMT", global = true)]
     pub format: String,
 
     // ── Plugin ──
