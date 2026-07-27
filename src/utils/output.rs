@@ -97,9 +97,10 @@ impl LiveDashboard {
         let pcolor = protocol_color(protocol);
         let tag = format!(" {} ", protocol.to_uppercase()).color(pcolor).bold();
 
-        let total = (target_count * cred_count) as u64;
+        let total_est = (target_count * cred_count) as u64;
+        let unlimited = total_est.max(1_000_000_000);
 
-        let spinner = _multi.add(ProgressBar::new(total));
+        let spinner = _multi.add(ProgressBar::new(unlimited));
         spinner.set_style(
             ProgressStyle::with_template("{spinner:.green} {msg}")
             .unwrap()
@@ -108,7 +109,7 @@ impl LiveDashboard {
         spinner.set_message(format!("{} initializing...", tag));
         spinner.enable_steady_tick(Duration::from_millis(80));
 
-        let progress = _multi.add(ProgressBar::new(total));
+        let progress = _multi.add(ProgressBar::new(unlimited));
         progress.set_style(
             ProgressStyle::with_template("  {msg}")
             .unwrap()
@@ -138,7 +139,7 @@ impl LiveDashboard {
             lockout_count: 0,
             rate_limit_count: 0,
             total_attempts: 0,
-            total_estimate: total,
+            total_estimate: total_est,
             start_time: Instant::now(),
             last_rate: Instant::now(),
             last_rate_count: 0,
@@ -159,25 +160,23 @@ impl LiveDashboard {
             return;
         }
         self.last_visual_update.set(now);
-        let total_display = if self.total_attempts > self.total_estimate {
-            format!("{}+", self.total_estimate)
-        } else {
-            self.total_estimate.to_string()
-        };
-        if self.total_attempts > self.total_estimate {
-            self.progress.set_length(self.total_attempts);
-        }
         self.progress.set_position(self.total_attempts);
         let elapsed = self.start_time.elapsed();
         let elapsed_str = if elapsed.as_secs() == 0 { "--".into() } else { fmt_dur(elapsed) };
+        let rate_str = if self.current_rate > 0.0 {
+            format!("{:.0}/s", self.current_rate)
+        } else {
+            "--/s".into()
+        };
 
         self.spinner.set_message(format!(
-            "{}  {}  {}  {}  {}",
+            "{}  {}  {}  {}  {}  {}",
             self.spinner_message_tag(),
-            format!("{}/{}", self.total_attempts, total_display).dimmed(),
+            format!("{}", self.total_attempts).dimmed(),
             format!("found:{}", self.success_count).green(),
             format!("fail:{}", self.fail_count).red(),
             format!("{}", elapsed_str).cyan(),
+            format!("{}", rate_str).yellow(),
         ));
 
         if self.verbose >= 2 {
@@ -215,8 +214,6 @@ impl LiveDashboard {
 
         if self.total_attempts > self.total_estimate {
             self.total_estimate = self.total_attempts;
-            self.spinner.set_length(self.total_estimate);
-            self.progress.set_length(self.total_estimate);
         }
 
         let now = Instant::now();
