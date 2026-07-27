@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use clap::{Parser, Subcommand, Args};
 use colored::Colorize;
+use std::io::Write;
 
 use crate::core::config::{AttackConfig, OutputFormat};
 use crate::utils::wordlist_gen::WordlistConfig;
@@ -171,6 +172,11 @@ pub enum Commands {
 
     #[command(about = "Generate a wordlist from target/personal information")]
     Create(CreateArgs),
+
+    #[command(about = "Display comprehensive manual with detailed usage, examples, and option reference")]
+    Man,
+    #[command(about = "Alias for man — display full user manual")]
+    How,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -524,6 +530,578 @@ pub fn print_banner() {
     println!("{}", banner.yellow());
     println!("{}", "\u{26a0}  WARNING: Authorized testing only. Unauthorized use is ILLEGAL.".red().bold());
     println!();
+}
+
+pub fn print_manual() {
+    let manual = r#"
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                       VELTRIX v1.2 — COMPLETE USER MANUAL                   ║
+║               Multi-Protocol Brute Force & Security Auditing Toolkit         ║
+║                               By AniipID                                    ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+────────────────────────────────────────────────────────────────────────────────
+TABLE OF CONTENTS
+────────────────────────────────────────────────────────────────────────────────
+  1.  INTRODUCTION
+  2.  INSTALLATION & SETUP
+  3.  COMMAND SYNTAX
+  4.  PROTOCOLS OVERVIEW (ALL 47)
+  5.  CREDENTIAL MANAGEMENT
+  6.  TARGET SPECIFICATION
+  7.  PROXY & NETWORK OPTIONS
+  8.  PERFORMANCE TUNING
+  9.  OUTPUT & REPORTING
+  10. ADVANCED FEATURES
+  11. USE CASES & COMBINATIONS
+  12. EXAMPLES
+  13. TROUBLESHOOTING
+  14. LEGAL NOTICE
+
+────────────────────────────────────────────────────────────────────────────────
+1. INTRODUCTION
+────────────────────────────────────────────────────────────────────────────────
+
+VELTRIX v1.2 is a high-performance multi-protocol brute force toolkit supporting
+47 network protocols. It is designed for authorized security auditing, penetration
+testing, and password strength assessment.
+
+Key capabilities:
+  • 47 protocol-specific brute force modules
+  • Smart credential merging (combine -u + -U and --password + -W sources)
+  • Adaptive progress tracking (no fixed upper limit on progress bar)
+  • TCP port scanner with banner grabbing
+  • Wordlist generation from personal/intelligence data
+  • Markov chain ML password prediction
+  • Distributed mode across multiple nodes
+  • Proxy rotation & chaining (HTTP, SOCKS4/5)
+  • Plugin system for custom protocol modules
+  • AES-256-GCM encryption for output files
+  • CIDR notation & IP range expansion
+  • Resume session support with checkpoint/restore
+  • Rate limiting, jitter delay, connection retry logic
+
+────────────────────────────────────────────────────────────────────────────────
+2. INSTALLATION & SETUP
+────────────────────────────────────────────────────────────────────────────────
+
+Pre-compiled binary:
+  Place the veltrix binary in your PATH (/usr/local/bin/ or ~/.local/bin/)
+  Ensure it has execute permissions: chmod +x veltrix
+
+Build from source:
+  Requirements: Rust toolchain (rustc, cargo)
+  git clone <repo>
+  cd veltrix
+  cargo build --release
+  cp target/release/veltrix /usr/local/bin/
+
+Verify installation:
+  veltrix --version
+  veltrix --help
+
+────────────────────────────────────────────────────────────────────────────────
+3. COMMAND SYNTAX
+────────────────────────────────────────────────────────────────────────────────
+
+  veltrix <COMMAND> [GLOBAL_OPTIONS] [PROTOCOL_OPTIONS]
+
+  <COMMAND>           One of: ssh, ftp, telnet, smtp, pop3, imap, rdp, mysql,
+                      postgres, ldap, redis, http, vnc, mongodb, mssql, smb,
+                      snmp, oracle, cassandra, couchdb, elasticsearch, firebird,
+                      rabbitmq, activemq, kafka, sip, rtsp, tomcat, jenkins,
+                      gitlab, sonarqube, docker, kubernetes, vault, consul,
+                      vmware, ilo, ipmi, xmpp, irc, nntp, cvs, svn, rexec,
+                      rlogin, squid, memcached, scan-ports, create, man, how
+
+────────────────────────────────────────────────────────────────────────────────
+4. PROTOCOLS OVERVIEW
+────────────────────────────────────────────────────────────────────────────────
+
+  Use: veltrix --list-protocols
+
+  ┌────────────────────┬──────────────┬────────────────────────────────────┐
+  │ Protocol           │ Default Port │ Auth Methods                       │
+  ├────────────────────┼──────────────┼────────────────────────────────────┤
+  │ ssh                │ 22           │ password, key                      │
+  │ ftp                │ 21           │ plain, TLS/SSL                     │
+  │ telnet             │ 23           │ plaintext                          │
+  │ smtp               │ 25/465/587   │ LOGIN, PLAIN, CRAM-MD5, STARTTLS   │
+  │ pop3               │ 110/995      │ USER/PASS, APOP, STLS              │
+  │ imap               │ 143/993      │ LOGIN, PLAIN, CRAM-MD5, STARTTLS   │
+  │ rdp                │ 3389         │ NLA, RDP Standard                  │
+  │ mysql              │ 3306         │ mysql_native_password              │
+  │ postgres           │ 5432         │ md5, cleartext, SSL                │
+  │ ldap               │ 389/636      │ simple bind, LDAPS                 │
+  │ redis              │ 6379/6380    │ AUTH, TLS                          │
+  │ http               │ 80/443       │ Basic, Digest, Form                │
+  │ vnc                │ 5900         │ VNC Auth                           │
+  │ mongodb            │ 27017        │ SCRAM, MONGODB-CR                  │
+  │ mssql              │ 1433         │ SQL Server Auth                    │
+  │ smb                │ 445          │ NTLMv1/v2                          │
+  │ snmp               │ 161          │ community strings (v1/v2c)         │
+  │ oracle             │ 1521         │ password                           │
+  │ cassandra          │ 9042         │ password                           │
+  │ couchdb            │ 5984         │ basic, cookie                      │
+  │ elasticsearch      │ 9200         │ basic, API key                     │
+  │ firebird           │ 3050         │ password                           │
+  │ rabbitmq           │ 5672         │ PLAIN, AMQPLAIN                    │
+  │ activemq           │ 61616        │ password                           │
+  │ kafka              │ 9092         │ SASL/PLAIN                         │
+  │ sip                │ 5060         │ digest                             │
+  │ rtsp               │ 554          │ basic, digest                      │
+  │ tomcat             │ 8080         │ manager-gui                        │
+  │ jenkins            │ 8080         │ basic, form                        │
+  │ gitlab             │ 80/443       │ token, basic                       │
+  │ sonarqube          │ 9000         │ token, basic                       │
+  │ docker             │ 2375/2376    │ basic                              │
+  │ kubernetes         │ 6443         │ token, basic                       │
+  │ vault              │ 8200         │ token, LDAP                        │
+  │ consul             │ 8500         │ token, basic                       │
+  │ vmware             │ 443          │ password                           │
+  │ ilo                │ 443          │ password                           │
+  │ ipmi               │ 623          │ RMCP+                              │
+  │ xmpp               │ 5222         │ PLAIN, SCRAM                       │
+  │ irc                │ 6667         │ PASS                               │
+  │ nntp               │ 119          │ AUTHINFO                           │
+  │ cvs                │ 2401         │ password                           │
+  │ svn                │ 3690         │ password                           │
+  │ rexec              │ 512          │ password                           │
+  │ rlogin             │ 513          │ password                           │
+  │ squid              │ 3128         │ basic, NTLM                        │
+  │ memcached          │ 11211        │ SASL                               │
+  └────────────────────┴──────────────┴────────────────────────────────────┘
+
+────────────────────────────────────────────────────────────────────────────────
+5. CREDENTIAL MANAGEMENT
+────────────────────────────────────────────────────────────────────────────────
+
+Users — three modes (combined automatically when both specified):
+  -u, --user USER           Single username (repeatable)
+  -U, --user-file FILE       File with one username per line
+  Both -u and -U can be used simultaneously; all users are merged.
+
+Passwords — three modes (combined automatically when both specified):
+  --password, --pwd PASS     Single password (repeatable)
+  -W, --password-list FILE   File with one password per line
+  Both --password and -W can be used simultaneously; all passwords are merged.
+
+Combo list (alternative to separate user/password files):
+  -C, --combo FILE           user:pass pairs, one per line
+
+Smart Credential Merging:
+  All credential sources are intelligently merged. Duplicates are removed
+  automatically. This allows combining targeted passwords from command-line
+  with large wordlists from files.
+
+  Examples:
+    veltrix ssh -t 10.0.0.1 -u admin -u root -U users.txt \\
+                --password pass123 -W passwords.txt
+
+    This will create: (admin + root + users_from_file) × (pass123 + passes_from_file)
+
+────────────────────────────────────────────────────────────────────────────────
+6. TARGET SPECIFICATION
+────────────────────────────────────────────────────────────────────────────────
+
+  -t, --target HOST[:PORT]   Target host (repeatable for multiple targets)
+  -l, --list FILE            File with target hosts, one per line
+  -p, --port PORT            Port number (overrides protocol default)
+
+  Target formats:
+    • IP address:       192.168.1.1
+    • Hostname:         server.example.com
+    • Host:Port:        10.0.0.1:3306
+    • CIDR range:       192.168.1.0/24
+    • IP range:         10.0.0.1-10.0.0.10
+    • Mixed:            targets.txt (one per line, any format)
+
+  Port specification:
+    • Protocol default port is used if -p is omitted
+    • Multiple -p flags for multiple ports
+    • Combined with targets for exhaustive scanning
+
+────────────────────────────────────────────────────────────────────────────────
+7. PROXY & NETWORK OPTIONS
+────────────────────────────────────────────────────────────────────────────────
+
+  --proxy PROXY              Single proxy: type://host[:port]
+                               Types: http, socks4, socks5
+                               Example: --proxy socks5://127.0.0.1:9050
+
+  --proxy-file FILE          Proxy rotation list (one per line, same format)
+
+  --proxy-chain PROXIES      Comma-separated chain:
+                               http://proxy1:8080,socks5://proxy2:1080
+
+  --timeout SEC              Connection timeout in seconds (default: 10)
+  --retries N                Connection retry count (default: 1)
+  --delay MS                 Delay between attempts in ms (default: 0)
+  --rate-limit N             Max attempts per second (0 = unlimited)
+
+  Protocol-specific options:
+  --rdp-domain DOMAIN        RDP domain (prepended to username)
+  --http-userfield FIELD     HTTP form username field name
+  --http-passfield FIELD     HTTP form password field name
+  --http-success TEXT        HTTP form success indicator string
+
+────────────────────────────────────────────────────────────────────────────────
+8. PERFORMANCE TUNING
+────────────────────────────────────────────────────────────────────────────────
+
+  -x, --threads N            Concurrent worker count (default: 10)
+                               Higher = faster but more network load.
+                               Start with 10, increase to 50-100 for LAN.
+
+  --timeout SEC              Lower timeout = faster failures (default: 10)
+                               Set to 3-5 for local networks, 10-15 for WAN.
+
+  --rate-limit N             Throttle to N attempts/sec (default: unlimited)
+                               Use 10-100 for rate-limited services.
+
+  --delay MS                 Pause between attempts (default: 0)
+                               Useful for avoiding lockout policies.
+
+  --retries N                Retry failed connections (default: 1)
+                               Set to 0 for speed, 2-3 for unreliable hosts.
+
+  --max-password-len N       Truncate passwords longer than N characters
+                               Speeds up testing of very long passwords.
+
+  --stop-on-first            Stop after first success per target
+                               Saves time when any valid credential is sufficient.
+
+  Performance tips:
+    • For LAN targets:  -x 50 --timeout 3 --retries 0
+    • For WAN targets:  -x 10 --timeout 10 --retries 2
+    • For lockout avoidance: --delay 1000 --rate-limit 5
+
+────────────────────────────────────────────────────────────────────────────────
+9. OUTPUT & REPORTING
+────────────────────────────────────────────────────────────────────────────────
+
+  -o, --output FILE          Write results to FILE
+  -f, --format FMT           Output format (default: plain)
+                               Formats:
+                                 plain    Human-readable text
+                                 json     JSON lines
+                                 csv      Comma-separated values
+                                 html     HTML report with visual formatting
+                                 yaml     YAML structured output
+
+  -v, --verbose              Verbosity level:
+                               1x (-v)    Show failed attempts
+                               2x (-vv)   Show debug info + rate stats
+
+  --encrypt                  Encrypt output file with AES-256-GCM
+  --encrypt-passphrase TEXT  Passphrase for encryption (prompted if omitted)
+
+  --decrypt FILE             Decrypt an encrypted output file
+  --decrypt-output FILE      Where to save decrypted output (default: stdout)
+
+  --gen-wordlist             Generate wordlist mode (see wordlist-gen below)
+  --list-protocols           List all supported protocols and exit
+  --list-plugin              List registered plugin modules
+
+────────────────────────────────────────────────────────────────────────────────
+10. ADVANCED FEATURES
+────────────────────────────────────────────────────────────────────────────────
+
+10.1 WORDLIST GENERATION
+─────────────────────────
+  Generate targeted wordlists from personal information:
+
+  --gen-wordlist             Activate wordlist generation mode
+  --wl-name "John Smith"     Target's full name
+  --wl-company "ACME Inc"    Company name
+  --wl-dob 1990-01-15        Date of birth (YYYY-MM-DD)
+  --wl-keyword WORD          Additional keyword (repeatable)
+  --wl-min-len N             Minimum password length (default: 4)
+  --wl-max-len N             Maximum password length (default: 32)
+  --wl-no-leet               Disable leet speak (1337) variations
+  --wl-output FILE           Save wordlist to file (default: stdout)
+
+  Example:
+    veltrix --gen-wordlist \\
+      --wl-name "John Smith" --wl-company "ACME" \\
+      --wl-dob 1985-06-20 --wl-keyword admin --wl-keyword server \\
+      --wl-min-len 6 --wl-max-len 16 --wl-output john_wordlist.txt
+
+10.2 ML PASSWORD PREDICTION
+─────────────────────────────
+  Train a Markov chain model on existing password lists to generate
+  statistically likely passwords:
+
+  --ml-train FILE            Train model on a wordlist file
+  --ml-generate N            Generate N passwords from trained model
+  --ml-order N               Markov chain order (default: 3)
+                               Higher = more similarity to training data
+  --ml-max-len N             Max generated password length (default: 24)
+  --ml-score FILE            Score passwords from file against model
+  --ml-output FILE           Save generated passwords to file
+
+  Example:
+    veltrix --ml-train passwords.txt --ml-generate 1000 \\
+      --ml-order 4 --ml-max-len 20 --ml-output predicted.txt
+
+10.3 PORT SCANNING
+────────────────────
+  veltrix scan-ports [OPTIONS] [GLOBAL_OPTIONS]
+
+  Options:
+    --ports SPEC             Port specification:
+                               '22,80,443'      Specific ports
+                               '1-1000'          Range
+                               'common'          ~1200 common ports (default)
+    --scan-timeout SEC       Per-port timeout (default: 3)
+    --rate N                 Max concurrent scans (default: 500)
+    --no-banner              Disable banner grabbing
+
+  Example:
+    veltrix scan-ports -t 10.0.0.1 --ports 1-10000 --rate 1000
+
+10.4 DISTRIBUTED MODE
+───────────────────────
+  Split attack across multiple machines:
+
+  Coordinator node:
+    veltrix ssh -t 10.0.0.0/24 -U users.txt -W passes.txt \\
+      --distributed coordinator://0.0.0.0:5555
+
+  Worker nodes:
+    veltrix ssh --distributed worker://<coordinator_ip>:5555
+
+10.5 SESSION RESUME
+─────────────────────
+  Resume an interrupted attack using saved session state:
+
+  veltrix ssh -t 10.0.0.1 -U users.txt -W passes.txt \\
+    --resume session.dat
+
+  The session saves progress periodically, allowing recovery from crashes
+  or manual interruptions (Ctrl+C sends SIGINT which triggers safe save).
+
+10.6 PLUGIN SYSTEM
+────────────────────
+  Load external protocol modules:
+
+  --plugin /path/to/plugin   Load plugin binary (repeatable)
+  --list-plugin              List all registered plugins
+
+  Plugins must implement the Veltrix plugin interface (see docs/PLUGINS.md).
+
+10.7 ENCRYPTION
+─────────────────
+  All output files can be encrypted with AES-256-GCM:
+
+  veltrix ssh -t 10.0.0.1 -u admin -W passwords.txt \\
+    -o results.txt --encrypt --encrypt-passphrase "s3cr3t"
+
+  Decrypt later:
+    veltrix --decrypt results.txt.enc --decrypt-output results.txt \\
+      --encrypt-passphrase "s3cr3t"
+
+10.8 CONFIGURATION FILES
+────────────────────────────
+  Use TOML configuration files for complex setups:
+
+  veltrix ssh -c config.toml
+
+  See the config.toml.example file in the repository for format details.
+
+────────────────────────────────────────────────────────────────────────────────
+11. USE CASES & COMBINATIONS
+────────────────────────────────────────────────────────────────────────────────
+
+11.1 SINGLE TARGET, SINGLE USER, PASSWORD FILE
+──────────────────────────────────────────────────
+  veltrix ssh -t 192.168.1.100 -u admin -W passwords.txt
+
+11.2 MULTIPLE TARGETS, USER FILE, PASSWORD FILE
+─────────────────────────────────────────────────────
+  veltrix ssh -t 10.0.0.1 -t 10.0.0.2 -U users.txt -W passwords.txt
+
+11.3 CIDR RANGE, COMBINED USER SOURCES
+───────────────────────────────────────────────
+  veltrix rdp -t 192.168.1.0/24 -u admin -u administrator -u root \\
+    --password 'P@ssw0rd' --password 'Welcome1' -W common_pass.txt
+
+11.4 ALL SOURCES COMBINED (SMART MERGE)
+───────────────────────────────────────────────
+  veltrix ssh -t 10.0.0.0/24 -u admin -U users.txt \\
+    --password 'temp123' -W rockyou.txt -x 20 --timeout 5
+
+  Credential total = (individual_users + file_users) × (individual_passes + file_passes)
+
+11.5 PROXY CHAIN FOR ANONYMITY
+────────────────────────────────────
+  veltrix ftp -t 10.0.0.5 -U users.txt -W passes.txt \\
+    --proxy-chain socks5://127.0.0.1:9050,http://proxy2:8080
+
+11.6 FULL NETWORK AUDIT WORKFLOW
+───────────────────────────────────────
+  Step 1 — Port scan to discover services:
+    veltrix scan-ports -t 10.0.0.0/24 --ports common -o scan.txt
+
+  Step 2 — Wordlist generation from OSINT:
+    veltrix --gen-wordlist --wl-name "Company X" --wl-keyword vpn \\
+      --wl-output custom.txt
+
+  Step 3 — Brute force each discovered service:
+    veltrix ssh -t 10.0.0.1 -u admin -W custom.txt -o results.json -f json
+    veltrix ftp -t 10.0.0.2 -U ftp_users.txt -W custom.txt
+    veltrix mysql -t 10.0.0.3:3306 -U db_users.txt -W custom.txt
+
+11.7 ML-ENHANCED ATTACK
+─────────────────────────────────
+  veltrix --ml-train rockyou.txt --ml-generate 5000 --ml-output ml_pass.txt
+  veltrix ssh -t 10.0.0.1 -u admin -W ml_pass.txt
+
+11.8 MULTI-PROTOCOL DISTRIBUTED ATTACK
+─────────────────────────────────────────────
+  Coordinator:
+    veltrix ssh -t 10.0.0.0/24 -U users.txt -W passes.txt \\
+      --distributed coordinator://0.0.0.0:5555
+
+  Worker 1:
+    veltrix --distributed worker://10.0.0.100:5555
+
+  Worker 2:
+    veltrix --distributed worker://10.0.0.101:5555
+
+────────────────────────────────────────────────────────────────────────────────
+12. QUICK REFERENCE — ALL OPTIONS
+────────────────────────────────────────────────────────────────────────────────
+
+  TARGET:
+    -t, --target HOST[:PORT]     Target host (repeatable)
+    -l, --list FILE              Target list file
+    -p, --port PORT              Port number(s)
+
+  CREDENTIALS:
+    -u, --user USER              Single username (repeatable)
+    -U, --user-file FILE         Username list file
+    --password, --pwd PASS       Single password (repeatable)
+    -W, --password-list FILE     Password list file
+    -C, --combo FILE             User:pass combo file
+
+  PERFORMANCE:
+    -x, --threads N              Concurrent workers (default: 10)
+    --timeout SEC                Connection timeout (default: 10)
+    --delay MS                   Delay between attempts (default: 0)
+    --rate-limit N               Max attempts/second (0 = unlimited)
+    --retries N                  Connection retries (default: 1)
+    --stop-on-first              Stop after first success per target
+    --max-password-len N         Truncate passwords
+
+  PROXY:
+    --proxy PROXY                Proxy (type://host:port)
+    --proxy-file FILE            Proxy rotation list
+    --proxy-chain PROXIES        Proxy chain
+
+  OUTPUT:
+    -o, --output FILE            Output file
+    -f, --format FMT             Format: plain, json, csv, html, yaml
+    -v, --verbose                Verbose mode (-v, -vv)
+
+  ENCRYPTION:
+    --encrypt                    Encrypt output (AES-256-GCM)
+    --encrypt-passphrase TEXT    Encryption passphrase
+    --decrypt FILE               Decrypt encrypted file
+    --decrypt-output FILE        Decrypted output path
+
+  WORDLIST GENERATION:
+    --gen-wordlist               Enable wordlist generation
+    --wl-name TEXT               Target name
+    --wl-company TEXT            Company name
+    --wl-dob DATE                Date of birth
+    --wl-keyword WORD            Additional keyword (repeatable)
+    --wl-min-len N               Min length (default: 4)
+    --wl-max-len N               Max length (default: 32)
+    --wl-no-leet                 Disable leet speak
+    --wl-output FILE             Output file
+
+  ML:
+    --ml-train FILE              Train model
+    --ml-generate N              Generate N passwords
+    --ml-order N                 Markov order (default: 3)
+    --ml-max-len N               Max password length (default: 24)
+    --ml-score FILE              Score passwords
+    --ml-output FILE             Output file
+
+  MISC:
+    --list-protocols             List protocols
+    --list-plugin                List plugins
+    --plugin PATH                Load plugin (repeatable)
+    --encrypt-passphrase TEXT    Passphrase
+    --rdp-domain DOMAIN          RDP domain
+    --http-userfield FIELD       HTTP form user field
+    --http-passfield FIELD       HTTP form pass field
+    --http-success TEXT          HTTP success indicator
+    -c, --config FILE            Config file (TOML)
+
+────────────────────────────────────────────────────────────────────────────────
+13. TROUBLESHOOTING
+────────────────────────────────────────────────────────────────────────────────
+
+PROBLEM: "No valid targets after DNS resolution"
+  SOLUTION: Ensure targets are reachable. Check DNS resolution and
+  network connectivity. Use IP addresses instead of hostnames.
+
+PROBLEM: "Failed to load credentials"
+  SOLUTION: Verify file paths exist and are readable. Ensure files
+  contain at least one non-empty, non-comment line.
+
+PROBLEM: Connection timeout errors
+  SOLUTION: Increase --timeout value. Check firewall rules. The target
+  service must be listening on the specified port.
+
+PROBLEM: Too many authentication failures / account locked out
+  SOLUTION: Use --delay and --rate-limit to slow down. Consider
+  password spraying (single password across many users) instead.
+
+PROBLEM: Progress bar shows unusual numbers
+  SOLUTION: The progress tracker is adaptive. It shows attempt count
+  against a dynamic estimate. The bar will not stop at a fixed number.
+  All combined credential sources (individual + files) are counted.
+
+PROBLEM: "Permission denied" when running
+  SOLUTION: Ensure binary has execute permissions: chmod +x veltrix
+
+PROBLEM: "Thread pool panic" or crashes with large wordlists
+  SOLUTION: Reduce -x threads. Large wordlists require more memory.
+  Use --max-password-len to truncate very long entries.
+
+────────────────────────────────────────────────────────────────────────────────
+14. LEGAL NOTICE
+────────────────────────────────────────────────────────────────────────────────
+
+  ⚠  WARNING: This tool is for AUTHORIZED SECURITY TESTING ONLY.
+
+  VELTRIX performs brute force authentication attacks against network services.
+  Unauthorized use of this tool against systems you do not own or have explicit
+  written permission to test is ILLEGAL and may violate:
+
+    • Computer Fraud and Abuse Act (CFAA) — US
+    • Computer Misuse Act 1990 — UK
+    • Cybercrime Prevention Act — Philippines
+    • Similar laws in other jurisdictions
+
+  By using this tool you agree to:
+    1. Only test systems you own or have written permission to test
+    2. Comply with all applicable local, state, and federal laws
+    3. Accept full responsibility for any consequences of misuse
+    4. Not engage in unauthorized access or credential theft
+
+  The developer provides this tool for educational purposes and authorized
+  security research only. Misuse may result in criminal prosecution.
+
+════════════════════════════════════════════════════════════════════════════════
+              End of VELTRIX v1.2 User Manual — By AniipID
+════════════════════════════════════════════════════════════════════════════════
+"#;
+    let _ = std::io::stdout().write_all(manual.as_bytes());
+    let _ = std::io::stdout().flush();
 }
 
 pub fn print_protocols() {

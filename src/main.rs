@@ -12,7 +12,7 @@ use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use clap::Parser;
-use cli::{print_banner, print_protocols, Cli, Commands, ProtocolArgs, CreateArgs};
+use cli::{print_banner, print_protocols, print_manual, Cli, Commands, ProtocolArgs, CreateArgs};
 use core::attack::AttackOrchestrator;
 use crate::utils::wordlist_gen::{WordlistConfig, generate_wordlist};
 use colored::Colorize;
@@ -210,6 +210,7 @@ async fn main() {
         Some(Commands::Rlogin(ref a)) => run_attack(&cli, "rlogin", a, running).await,
         Some(Commands::Squid(ref a)) => run_attack(&cli, "squid", a, running).await,
         Some(Commands::Memcached(ref a)) => run_attack(&cli, "memcached", a, running).await,
+        Some(Commands::Man) | Some(Commands::How) => print_manual(),
         Some(Commands::Create(ref a)) => run_create(a).await,
         None => {
             print_banner();
