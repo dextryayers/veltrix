@@ -233,6 +233,7 @@ impl LiveDashboard {
             self.println_stdout(msg);
         } else if result.error.is_some() {
             self.error_count += 1;
+            self.fail_count += 1;
             let brief = result.error.as_ref().unwrap();
             let brief = brief.split(&['\r', '\n'][..]).next().unwrap_or(brief);
             let msg = if self.verbose >= 2 {
@@ -459,6 +460,7 @@ impl OutputHandler {
             self.success_count += 1;
         } else if result.error.is_some() {
             self.error_count += 1;
+            self.fail_count += 1;
         } else {
             self.fail_count += 1;
         }
