@@ -17,7 +17,6 @@ use super::wordlist::{load_combo_list, load_wordlist};
 use super::worker::{WorkerPool, WorkerTask};
 use crate::proxy::{load_proxy_list, ProxyConfig};
 use crate::utils::output::OutputHandler;
-use crate::utils::patterns::{classify_error, ResponseCategory};
 use crate::utils::ratelimit::{JitterDelay, RateLimiter};
 use crate::utils::report::save_html_report;
 use crate::protocols::{http, rdp};
@@ -248,7 +247,7 @@ impl AttackOrchestrator {
                     let mut handles = Vec::with_capacity(before);
                     for target in t {
                         let permit = Arc::clone(&sem);
-                        let addr = target.addr_string();
+                        let addr = target.cached_addr.clone();
                         let timeout_dur = std::time::Duration::from_secs(3);
                         handles.push(async move {
                             let _guard = permit.acquire().await;
@@ -322,9 +321,6 @@ impl AttackOrchestrator {
         let mut successes_global = 0u64;
         let mut failures_global = 0u64;
         let mut errors_global = 0u64;
-        let mut lockout_events = 0u64;
-        let mut rate_limit_events = 0u64;
-        let mut submitted = 0usize;
 
         fn drain_results(
             result_rx: &mut mpsc::UnboundedReceiver<(AuthResult, bool)>,
@@ -334,21 +330,17 @@ impl AttackOrchestrator {
             successes_global: &mut u64,
             failures_global: &mut u64,
             errors_global: &mut u64,
-            lockout_events: &mut u64,
-            rate_limit_events: &mut u64,
         ) {
             loop {
                 match result_rx.try_recv() {
                     Ok((result, _stop_early)) => {
-                        let classified = classify_error(result.error.as_deref(), result.success);
-                        match classified.category {
-                            ResponseCategory::AccountLocked => *lockout_events += 1,
-                            ResponseCategory::RateLimited => *rate_limit_events += 1,
-                            _ => {}
+                        if result.success {
+                            *successes_global += 1;
+                        } else if result.error.is_some() {
+                            *errors_global += 1;
+                        } else {
+                            *failures_global += 1;
                         }
-                        if result.success { *successes_global += 1; }
-                        else if result.error.is_some() { *errors_global += 1; }
-                        else { *failures_global += 1; }
 
                         if let Some(ref mut s) = session {
                             s.mark_tested(&result.username, &result.password);
@@ -365,16 +357,22 @@ impl AttackOrchestrator {
             }
         }
 
-        const BATCH: usize = 64;
+        const BATCH: usize = 256;
         let mut batch_submitted = 0usize;
+        let mut status_counter = 0usize;
+
+        // Pre-arc targets and credentials to avoid cloning in the hot loop
+        let arc_targets: Vec<Arc<Target>> = self.targets.iter().map(|t| Arc::new(t.clone())).collect();
+        let arc_credentials: Vec<Arc<Credential>> = self.credentials.iter().map(|c| Arc::new(c.clone())).collect();
 
         'outer: for t_idx in 0..target_count {
+            let target = &arc_targets[t_idx];
             for c_idx in 0..cred_count {
                 if !self.running.load(Ordering::SeqCst) {
                     break 'outer;
                 }
 
-                let credential = &self.credentials[c_idx];
+                let credential = &arc_credentials[c_idx];
                 if let Some(ref session) = self.session {
                     if session.is_tested(&credential.username, &credential.password) {
                         attempt_count += 1;
@@ -386,29 +384,28 @@ impl AttackOrchestrator {
                 self.rate_limiter.wait_if_needed().await;
                 self.jitter.delay().await;
 
-                // Show current attempt in status bar
-                self.output.set_status(format!("{}:{} -> {}:{}",
-                    self.targets[t_idx].host, self.targets[t_idx].port,
-                    credential.username, credential.password));
+                if status_counter & 3 == 0 {
+                    self.output.set_status(format!("{}:{} -> {}:{}",
+                        target.host, target.port,
+                        credential.username, credential.password));
+                }
+                status_counter += 1;
 
                 pool.submit_with_sender(WorkerTask {
-                    target: Arc::new(self.targets[t_idx].clone()),
-                    credential: Arc::new(credential.clone()),
-                    attempt_index: attempt_count,
+                    target: Arc::clone(target),
+                    credential: Arc::clone(credential),
                 }, result_tx.clone());
 
                 attempt_count += 1;
-                submitted += 1;
                 self.output.inc_progress();
                 batch_submitted += 1;
 
-                // Drain results after every batch to show real-time output
                 if batch_submitted >= BATCH {
                     drain_results(
                         &mut result_rx, &mut self.output, &mut self.results,
                         &mut self.session,
                         &mut successes_global, &mut failures_global,
-                        &mut errors_global, &mut lockout_events, &mut rate_limit_events,
+                        &mut errors_global,
                     );
                     batch_submitted = 0;
                 }
@@ -422,7 +419,7 @@ impl AttackOrchestrator {
             &mut result_rx, &mut self.output, &mut self.results,
             &mut self.session,
             &mut successes_global, &mut failures_global,
-            &mut errors_global, &mut lockout_events, &mut rate_limit_events,
+            &mut errors_global,
         );
 
         if let Some(ref session) = self.session {
@@ -430,9 +427,6 @@ impl AttackOrchestrator {
                 let _ = session.save(resume_path);
             }
         }
-
-        if lockout_events > 0 { log::warn!("Detected {} account lockout(s)", lockout_events); }
-        if rate_limit_events > 0 { log::warn!("Detected {} rate limiting event(s)", rate_limit_events); }
 
         let end_time = Utc::now();
         let duration = end_time.signed_duration_since(start_time).to_std().unwrap_or_default();

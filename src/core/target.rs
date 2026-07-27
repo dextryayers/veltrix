@@ -10,26 +10,43 @@ pub struct Target {
     pub port: u16,
     pub protocol: String,
     pub address: Option<SocketAddr>,
+    #[serde(default)]
+    pub cached_addr: String,
 }
 
 impl Target {
     pub fn new(host: String, port: u16, protocol: &str) -> Self {
+        let cached_addr = format!("{}:{}", host, port);
         Target {
             host,
             port,
             protocol: protocol.to_string(),
             address: None,
+            cached_addr,
         }
     }
 
+    pub fn addr_string(&self) -> String {
+        if self.cached_addr.is_empty() {
+            format!("{}:{}", self.host, self.port)
+        } else {
+            self.cached_addr.clone()
+        }
+    }
+
+    pub fn addr_str(&self) -> &str {
+        &self.cached_addr
+    }
+
     pub async fn resolve(&mut self, timeout: Duration) -> Result<(), AttackError> {
-        let addr_str = format!("{}:{}", self.host, self.port);
+        let addr_str = self.cached_addr.clone();
         let host_clone = self.host.clone();
         match tokio::time::timeout(timeout, async {
             tokio::task::spawn_blocking(move || {
                 addr_str.to_socket_addrs()
             }).await
-                .map_err(|e| AttackError::internal(format!("Join error: {}", e)))?                .map_err(|e| AttackError::dns(&host_clone, format!("DNS error: {}", e)))
+                .map_err(|e| AttackError::internal(format!("Join error: {}", e)))?
+                .map_err(|e| AttackError::dns(&host_clone, format!("DNS error: {}", e)))
         }).await {
             Ok(Ok(mut addrs)) => {
                 self.address = addrs.next();
@@ -38,10 +55,6 @@ impl Target {
             Ok(Err(e)) => Err(AttackError::dns(&host_clone, e.to_string())),
             Err(_) => Err(AttackError::dns(&host_clone, format!("Timeout resolving {}", host_clone))),
         }
-    }
-
-    pub fn addr_string(&self) -> String {
-        format!("{}:{}", self.host, self.port)
     }
 
     pub fn is_resolved(&self) -> bool {

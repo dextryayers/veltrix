@@ -5,6 +5,12 @@ edition = "2021"
 description = "Multi-protocol brute force toolkit for security professionals"
 authors = ["aniippxploit"]
 
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
 [dependencies]
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
@@ -72,5 +78,7 @@ aes-gcm = "0.10"
 argon2 = "0.5"
 hex = "0.4"
 fastrand = "2.0"
+base64 = "0.22"
+dashmap = "6"
 
 [dev-dependencies]

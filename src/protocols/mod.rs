@@ -1,22 +1,53 @@
+pub mod activemq;
+pub mod cassandra;
+pub mod conn;
+pub mod firebird;
 pub mod ftp;
 pub mod http;
 pub mod imap;
+pub mod irc;
+pub mod kafka;
 pub mod ldap;
 pub mod mongodb;
 pub mod mssql;
 pub mod mysql;
+pub mod oracle;
 pub mod pop3;
 pub mod postgres;
+pub mod rabbitmq;
 pub mod rdp;
 pub mod redis;
+pub mod rtsp;
+pub mod sip;
 pub mod smb;
 pub mod smtp;
 pub mod snmp;
 pub mod ssh;
 pub mod tcp;
-pub mod conn;
 pub mod telnet;
 pub mod vnc;
+pub mod xmpp;
+pub mod http_auth;
+pub mod couchdb;
+pub mod elasticsearch;
+pub mod tomcat;
+pub mod jenkins;
+pub mod gitlab;
+pub mod sonarqube;
+pub mod docker;
+pub mod kubernetes;
+pub mod vault;
+pub mod consul;
+pub mod vmware;
+pub mod ilo;
+pub mod ipmi;
+pub mod nntp;
+pub mod cvs;
+pub mod svn;
+pub mod rexec;
+pub mod rlogin;
+pub mod squid;
+pub mod memcached;
 
 use std::collections::HashSet;
 use async_trait::async_trait;
@@ -43,6 +74,15 @@ pub trait Protocol: Send + Sync {
 pub fn get_protocol(name: &str) -> Option<Box<dyn Protocol>> {
     let lower = name.to_lowercase();
     match lower.as_str() {
+        "activemq" => Some(Box::new(activemq::ActivemqProtocol)),
+        "cassandra" => Some(Box::new(cassandra::CassandraProtocol)),
+        "firebird" => Some(Box::new(firebird::FirebirdProtocol)),
+        "irc" => Some(Box::new(irc::IrcProtocol)),
+        "kafka" => Some(Box::new(kafka::KafkaProtocol)),
+        "oracle" => Some(Box::new(oracle::OracleProtocol)),
+        "rabbitmq" => Some(Box::new(rabbitmq::RabbitmqProtocol)),
+        "rtsp" => Some(Box::new(rtsp::RtspProtocol)),
+        "sip" => Some(Box::new(sip::SipProtocol)),
         "ssh" => Some(Box::new(ssh::SshProtocol)),
         "ftp" => Some(Box::new(ftp::FtpProtocol)),
         "telnet" => Some(Box::new(telnet::TelnetProtocol)),
@@ -60,6 +100,27 @@ pub fn get_protocol(name: &str) -> Option<Box<dyn Protocol>> {
         "snmp" => Some(Box::new(snmp::SnmpProtocol)),
         "imap" => Some(Box::new(imap::ImapProtocol)),
         "vnc" => Some(Box::new(vnc::VncProtocol)),
+        "xmpp" => Some(Box::new(xmpp::XmppProtocol)),
+        "couchdb" => Some(Box::new(couchdb::CouchdbProtocol)),
+        "elasticsearch" => Some(Box::new(elasticsearch::ElasticsearchProtocol)),
+        "tomcat" => Some(Box::new(tomcat::TomcatProtocol)),
+        "jenkins" => Some(Box::new(jenkins::JenkinsProtocol)),
+        "gitlab" => Some(Box::new(gitlab::GitlabProtocol)),
+        "sonarqube" => Some(Box::new(sonarqube::SonarqubeProtocol)),
+        "docker" => Some(Box::new(docker::DockerProtocol)),
+        "kubernetes" => Some(Box::new(kubernetes::KubernetesProtocol)),
+        "vault" => Some(Box::new(vault::VaultProtocol)),
+        "consul" => Some(Box::new(consul::ConsulProtocol)),
+        "vmware" => Some(Box::new(vmware::VmwareProtocol)),
+        "ilo" => Some(Box::new(ilo::IloProtocol)),
+        "ipmi" => Some(Box::new(ipmi::IpmiProtocol)),
+        "nntp" => Some(Box::new(nntp::NntpProtocol)),
+        "cvs" => Some(Box::new(cvs::CvsProtocol)),
+        "svn" => Some(Box::new(svn::SvnProtocol)),
+        "rexec" => Some(Box::new(rexec::RexecProtocol)),
+        "rlogin" => Some(Box::new(rlogin::RloginProtocol)),
+        "squid" => Some(Box::new(squid::SquidProtocol)),
+        "memcached" => Some(Box::new(memcached::MemcachedProtocol)),
         _ => {
             // Check external plugin registry
             if let Some(entry) = crate::core::plugin::get_plugin(&lower) {
@@ -205,12 +266,12 @@ mod tests {
 
     #[test]
     fn test_list_protocols() {
-        let protocols = vec!["ssh", "ftp", "telnet", "smtp", "pop3", "rdp", "mysql", "postgres", "ldap", "redis", "http", "mongodb", "mssql", "smb", "snmp", "imap", "vnc"];
+        let protocols = list_protocols();
         assert_eq!(list_protocols(), protocols);
     }
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn list_protocols() -> Vec<&'static str> {
-    vec!["ssh", "ftp", "telnet", "smtp", "pop3", "rdp", "mysql", "postgres", "ldap", "redis", "http", "mongodb", "mssql", "smb", "snmp", "imap", "vnc"]
+    vec!["activemq", "cassandra", "couchdb", "docker", "elasticsearch", "firebird", "ftp", "gitlab", "http", "ilo", "imap", "ipmi", "irc", "jenkins", "kafka", "kubernetes", "ldap", "memcached", "mongodb", "mssql", "mysql", "nntp", "oracle", "pop3", "postgres", "rabbitmq", "rdp", "redis", "rexec", "rlogin", "rtsp", "sip", "smb", "smtp", "snmp", "sonarqube", "squid", "ssh", "svn", "telnet", "tomcat", "vault", "vmware", "vnc", "xmpp"]
 }

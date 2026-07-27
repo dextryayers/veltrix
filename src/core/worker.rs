@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering, AtomicU64};
 use std::time::Duration;
-use tokio::sync::{Semaphore, mpsc, Mutex};
+use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinSet;
 
 use super::config::AttackConfig;
@@ -14,7 +14,6 @@ use crate::proxy::ProxyConfig;
 pub struct WorkerTask {
     pub target: Arc<Target>,
     pub credential: Arc<Credential>,
-    pub attempt_index: u64,
 }
 
 pub struct WorkerPool {
@@ -23,29 +22,28 @@ pub struct WorkerPool {
     retries: u32,
     timeout: Duration,
     stop_on_first: bool,
-    proxies: Vec<ProxyConfig>,
-    proxy_failures: Arc<Mutex<Vec<u64>>>,
-    skipped_users: Arc<Mutex<std::collections::HashSet<String>>>,
+    proxies: Arc<Vec<ProxyConfig>>,
+    proxy_failures: Arc<Vec<AtomicU64>>,
     tasks: JoinSet<()>,
     total_submitted: Arc<AtomicU64>,
+    skipped_users: Arc<dashmap::DashSet<String>>,
 }
-
-const CHANNEL_BUF: usize = 8192;
 
 impl WorkerPool {
     pub fn new(config: &AttackConfig, running: Arc<AtomicBool>, proxies: Vec<ProxyConfig>) -> Self {
-        let proxy_failures = Arc::new(Mutex::new(vec![0u64; proxies.len().max(1)]));
+        let proxy_count = proxies.len().max(1);
+        let proxy_failures = Arc::new((0..proxy_count).map(|_| AtomicU64::new(0)).collect());
         WorkerPool {
             semaphore: Arc::new(Semaphore::new(config.threads)),
             running,
             retries: config.retries,
             timeout: config.timeout,
             stop_on_first: config.stop_on_first,
-            proxies,
+            proxies: Arc::new(proxies),
             proxy_failures,
-            skipped_users: Arc::new(Mutex::new(std::collections::HashSet::new())),
             tasks: JoinSet::new(),
             total_submitted: Arc::new(AtomicU64::new(0)),
+            skipped_users: Arc::new(dashmap::DashSet::new()),
         }
     }
 
@@ -69,16 +67,14 @@ impl WorkerPool {
         let retries = self.retries;
         let timeout = self.timeout;
         let stop_early = self.stop_on_first;
+        let proxies = Arc::clone(&self.proxies);
         let proxy_fails = Arc::clone(&self.proxy_failures);
         let skipped = Arc::clone(&self.skipped_users);
-        let proxy = self.get_proxy_for(task.attempt_index as usize);
-        let current_proxy_idx = task.attempt_index as usize;
         let target = task.target;
         let credential = task.credential;
-        let external_tx = external_tx;
 
         self.tasks.spawn(async move {
-            if is_skipped(&skipped, &credential.username).await {
+            if skipped.contains(&credential.username) {
                 let _ = send_result(&external_tx, (
                     AuthResult::new(
                         target.host.clone(), target.port, &target.protocol,
@@ -108,7 +104,11 @@ impl WorkerPool {
             };
 
             let mut last_result = None;
-            let mut current_proxy = proxy;
+            let mut current_proxy = if proxies.is_empty() {
+                None
+            } else {
+                Some(proxies[0].clone())
+            };
 
             for attempt in 0..=retries {
                 if !running.load(Ordering::Relaxed) {
@@ -132,7 +132,7 @@ impl WorkerPool {
                 }
 
                 if crate::utils::patterns::should_skip_user(&classified) {
-                    add_skipped(&skipped, &credential.username).await;
+                    skipped.insert(credential.username.clone());
                     let _ = send_result(&external_tx, (
                         AuthResult {
                             error: Some(format!("Account locked: {}", classified.message)),
@@ -149,7 +149,9 @@ impl WorkerPool {
                 }
 
                 if crate::utils::patterns::should_rotate_proxy(&classified) && current_proxy.is_some() {
-                    inc_proxy_fail(&proxy_fails, current_proxy_idx).await;
+                    for f in proxy_fails.iter() {
+                        f.fetch_add(1, Ordering::Relaxed);
+                    }
                     current_proxy = None;
                 }
 
@@ -178,35 +180,10 @@ impl WorkerPool {
     pub fn is_idle(&self) -> bool {
         self.tasks.is_empty()
     }
-
-    fn get_proxy_for(&self, index: usize) -> Option<ProxyConfig> {
-        if self.proxies.is_empty() {
-            None
-        } else {
-            Some(self.proxies[index % self.proxies.len()].clone())
-        }
-    }
 }
 
 async fn send_result(tx: &Option<mpsc::UnboundedSender<(AuthResult, bool)>>, result: (AuthResult, bool)) {
     if let Some(ref t) = tx {
         let _ = t.send(result);
-    }
-}
-
-async fn is_skipped(skipped: &Arc<Mutex<std::collections::HashSet<String>>>, username: &str) -> bool {
-    let sk = skipped.lock().await;
-    sk.contains(username)
-}
-
-async fn add_skipped(skipped: &Arc<Mutex<std::collections::HashSet<String>>>, username: &str) {
-    let mut sk = skipped.lock().await;
-    sk.insert(username.to_string());
-}
-
-async fn inc_proxy_fail(proxy_fails: &Arc<Mutex<Vec<u64>>>, idx: usize) {
-    let mut fails = proxy_fails.lock().await;
-    if idx < fails.len() {
-        fails[idx] += 1;
     }
 }
