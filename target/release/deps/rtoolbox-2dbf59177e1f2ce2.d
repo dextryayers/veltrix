@@ -1,0 +1,12 @@
+/home/aniippxploit/veltrix/target/release/deps/rtoolbox-2dbf59177e1f2ce2.d: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rtoolbox-0.0.5/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rtoolbox-0.0.5/src/atty.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rtoolbox-0.0.5/src/fix_line_issues.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rtoolbox-0.0.5/src/print_tty.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rtoolbox-0.0.5/src/safe_string.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rtoolbox-0.0.5/src/safe_vec.rs
+
+/home/aniippxploit/veltrix/target/release/deps/librtoolbox-2dbf59177e1f2ce2.rlib: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rtoolbox-0.0.5/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rtoolbox-0.0.5/src/atty.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rtoolbox-0.0.5/src/fix_line_issues.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rtoolbox-0.0.5/src/print_tty.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rtoolbox-0.0.5/src/safe_string.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rtoolbox-0.0.5/src/safe_vec.rs
+
+/home/aniippxploit/veltrix/target/release/deps/librtoolbox-2dbf59177e1f2ce2.rmeta: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rtoolbox-0.0.5/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rtoolbox-0.0.5/src/atty.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rtoolbox-0.0.5/src/fix_line_issues.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rtoolbox-0.0.5/src/print_tty.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rtoolbox-0.0.5/src/safe_string.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rtoolbox-0.0.5/src/safe_vec.rs
+
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rtoolbox-0.0.5/src/lib.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rtoolbox-0.0.5/src/atty.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rtoolbox-0.0.5/src/fix_line_issues.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rtoolbox-0.0.5/src/print_tty.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rtoolbox-0.0.5/src/safe_string.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rtoolbox-0.0.5/src/safe_vec.rs:
