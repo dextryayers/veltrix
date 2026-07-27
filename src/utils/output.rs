@@ -57,6 +57,7 @@ pub struct LiveDashboard {
     pub lockout_count: u64,
     pub rate_limit_count: u64,
     pub total_attempts: u64,
+    pub total_estimate: u64,
     start_time: Instant,
     last_rate: Instant,
     last_rate_count: u64,
@@ -137,6 +138,7 @@ impl LiveDashboard {
             lockout_count: 0,
             rate_limit_count: 0,
             total_attempts: 0,
+            total_estimate: total,
             start_time: Instant::now(),
             last_rate: Instant::now(),
             last_rate_count: 0,
@@ -157,7 +159,14 @@ impl LiveDashboard {
             return;
         }
         self.last_visual_update.set(now);
-        let total = (self._target_count * self._cred_count) as u64;
+        let total_display = if self.total_attempts > self.total_estimate {
+            format!("{}+", self.total_estimate)
+        } else {
+            self.total_estimate.to_string()
+        };
+        if self.total_attempts > self.total_estimate {
+            self.progress.set_length(self.total_attempts);
+        }
         self.progress.set_position(self.total_attempts);
         let elapsed = self.start_time.elapsed();
         let elapsed_str = if elapsed.as_secs() == 0 { "--".into() } else { fmt_dur(elapsed) };
@@ -165,7 +174,7 @@ impl LiveDashboard {
         self.spinner.set_message(format!(
             "{}  {}  {}  {}  {}",
             self.spinner_message_tag(),
-            format!("{}/{}", self.total_attempts, total).dimmed(),
+            format!("{}/{}", self.total_attempts, total_display).dimmed(),
             format!("found:{}", self.success_count).green(),
             format!("fail:{}", self.fail_count).red(),
             format!("{}", elapsed_str).cyan(),
@@ -203,6 +212,12 @@ impl LiveDashboard {
     pub fn inc_progress(&mut self) {
         self.spinner.inc(1);
         self.total_attempts += 1;
+
+        if self.total_attempts > self.total_estimate {
+            self.total_estimate = self.total_attempts;
+            self.spinner.set_length(self.total_estimate);
+            self.progress.set_length(self.total_estimate);
+        }
 
         let now = Instant::now();
         let dt = now.duration_since(self.last_rate);

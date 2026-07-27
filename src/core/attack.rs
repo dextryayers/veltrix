@@ -160,19 +160,25 @@ impl AttackOrchestrator {
             return Ok(credentials);
         }
 
-        let users = if !config.users.is_empty() {
-            config.users.clone()
-        } else if let Some(user_path) = &config.user_file {
-            load_wordlist(user_path).await?
-        } else {
+        let mut users: Vec<String> = Vec::new();
+        if !config.users.is_empty() {
+            users.extend(config.users.clone());
+        }
+        if let Some(user_path) = &config.user_file {
+            let file_users = load_wordlist(user_path).await?;
+            users.extend(file_users);
+        }
+        if users.is_empty() {
             return Err(AttackError::config("No users provided"));
-        };
+        }
 
-        let passwords = if !config.passwords.is_empty() {
-            config.passwords.clone()
-        } else if let Some(pass_path) = &config.password_file {
+        let mut passwords: Vec<String> = Vec::new();
+        if !config.passwords.is_empty() {
+            passwords.extend(config.passwords.clone());
+        }
+        if let Some(pass_path) = &config.password_file {
             let base_passwords = load_wordlist(pass_path).await?;
-            if let Some(rule_path) = &config.rule_file {
+            let expanded = if let Some(rule_path) = &config.rule_file {
                 if Path::new(rule_path).exists() {
                     match load_rules(rule_path) {
                         Ok(rules) => {
@@ -191,17 +197,15 @@ impl AttackOrchestrator {
                 }
             } else {
                 base_passwords
-            }
-        } else {
+            };
+            passwords.extend(expanded);
+        }
+        if passwords.is_empty() {
             return Err(AttackError::config("No passwords provided"));
-        };
-
-        if users.is_empty() || passwords.is_empty() {
-            return Err(AttackError::config("Empty user or password list"));
         }
 
         credentials = build_credentials(config, &users, &passwords);
-        log::info!("Loaded {} credentials ({} users × {} passwords",
+        log::info!("Loaded {} credentials ({} users × {} passwords)",
             credentials.len(), users.len(), passwords.len(),
         );
         Ok(credentials)
