@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use chrono::Utc;
 use futures::future::join_all;
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, mpsc};
 
 use super::cidr::expand_targets;
 use super::config::AttackConfig;
@@ -242,7 +242,6 @@ impl AttackOrchestrator {
 
         let targets = match Self::load_targets(&self.config).await {
             Ok(mut t) => {
-                // Health check: parallel TCP probe to filter unreachable targets
                 let before = t.len();
                 if before > 10 {
                     let sem = Arc::new(Semaphore::new(50));
@@ -254,10 +253,7 @@ impl AttackOrchestrator {
                         handles.push(async move {
                             let _guard = permit.acquire().await;
                             match tokio::time::timeout(timeout_dur, tokio::net::TcpStream::connect(&addr)).await {
-                                Ok(Ok(stream)) => {
-                                    drop(stream);
-                                    Some(target)
-                                }
+                                Ok(Ok(stream)) => { drop(stream); Some(target) }
                                 _ => None,
                             }
                         });
@@ -272,18 +268,7 @@ impl AttackOrchestrator {
             }
             Err(e) => {
                 log::error!("Failed to load targets: {}", e);
-                return AttackSummary {
-                    start_time,
-                    end_time: Some(Utc::now()),
-                    total_targets: 0,
-                    total_credentials: 0,
-                    attempts: 0,
-                    successes: 0,
-                    failures: 0,
-                    errors: 0,
-                    results: vec![],
-                    total_duration: Some(std::time::Duration::ZERO),
-                };
+                return empty_summary(start_time);
             }
         };
         self.targets = targets;
@@ -292,27 +277,15 @@ impl AttackOrchestrator {
             Ok(c) => c,
             Err(e) => {
                 log::error!("Failed to load credentials: {}", e);
-                return AttackSummary {
-                    start_time,
-                    end_time: Some(Utc::now()),
-                    total_targets: self.targets.len(),
-                    total_credentials: 0,
-                    attempts: 0,
-                    successes: 0,
-                    failures: 0,
-                    errors: 0,
-                    results: vec![],
-                    total_duration: Some(std::time::Duration::ZERO),
-                };
+                return empty_summary(start_time);
             }
         };
         self.credentials = credentials;
         self.proxies = Self::load_proxies(&self.config);
 
-        // Deduplicate credentials
         let before = self.credentials.len();
         if before > 0 {
-            let mut seen = std::collections::HashSet::new();
+            let mut seen = HashSet::new();
             self.credentials.retain(|c| seen.insert((c.username.clone(), c.password.clone())));
             let removed = before - self.credentials.len();
             if removed > 0 {
@@ -341,26 +314,67 @@ impl AttackOrchestrator {
             self.targets.len(), self.credentials.len(), total_combinations));
 
         let mut pool = WorkerPool::new(&self.config, Arc::clone(&self.running), self.proxies.clone());
+        let (result_tx, mut result_rx) = mpsc::unbounded_channel();
+
+        let target_count = self.targets.len();
+        let cred_count = self.credentials.len();
         let mut attempt_count = 0u64;
         let mut successes_global = 0u64;
         let mut failures_global = 0u64;
         let mut errors_global = 0u64;
         let mut lockout_events = 0u64;
         let mut rate_limit_events = 0u64;
+        let mut submitted = 0usize;
 
-        let target_count = self.targets.len();
-        let cred_count = self.credentials.len();
+        fn drain_results(
+            result_rx: &mut mpsc::UnboundedReceiver<(AuthResult, bool)>,
+            output: &mut OutputHandler,
+            results: &mut Vec<AuthResult>,
+            session: &mut Option<SessionState>,
+            successes_global: &mut u64,
+            failures_global: &mut u64,
+            errors_global: &mut u64,
+            lockout_events: &mut u64,
+            rate_limit_events: &mut u64,
+        ) {
+            loop {
+                match result_rx.try_recv() {
+                    Ok((result, _stop_early)) => {
+                        let classified = classify_error(result.error.as_deref(), result.success);
+                        match classified.category {
+                            ResponseCategory::AccountLocked => *lockout_events += 1,
+                            ResponseCategory::RateLimited => *rate_limit_events += 1,
+                            _ => {}
+                        }
+                        if result.success { *successes_global += 1; }
+                        else if result.error.is_some() { *errors_global += 1; }
+                        else { *failures_global += 1; }
 
-        'submit_loop: for target_idx in 0..target_count {
-            let target = &self.targets[target_idx];
-            for cred_idx in 0..cred_count {
+                        if let Some(ref mut s) = session {
+                            s.mark_tested(&result.username, &result.password);
+                            if result.success {
+                                s.add_success(&result.target_host, &result.protocol, &result.username, &result.password);
+                            }
+                        }
+                        output.on_result(&result);
+                        results.push(result);
+                    }
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+                }
+            }
+        }
+
+        const BATCH: usize = 64;
+        let mut batch_submitted = 0usize;
+
+        'outer: for t_idx in 0..target_count {
+            for c_idx in 0..cred_count {
                 if !self.running.load(Ordering::SeqCst) {
-                    log::info!("Graceful shutdown requested. Stopping at attempt {}.", attempt_count);
-                    break 'submit_loop;
+                    break 'outer;
                 }
 
-                let credential = &self.credentials[cred_idx];
-
+                let credential = &self.credentials[c_idx];
                 if let Some(ref session) = self.session {
                     if session.is_tested(&credential.username, &credential.password) {
                         attempt_count += 1;
@@ -372,102 +386,44 @@ impl AttackOrchestrator {
                 self.rate_limiter.wait_if_needed().await;
                 self.jitter.delay().await;
 
-                pool.submit(WorkerTask {
-                    target: Arc::new(target.clone()),
+                // Show current attempt in status bar
+                self.output.set_status(format!("{}:{} -> {}:{}",
+                    self.targets[t_idx].host, self.targets[t_idx].port,
+                    credential.username, credential.password));
+
+                pool.submit_with_sender(WorkerTask {
+                    target: Arc::new(self.targets[t_idx].clone()),
                     credential: Arc::new(credential.clone()),
                     attempt_index: attempt_count,
-                });
+                }, result_tx.clone());
 
-                self.output.inc_progress();
                 attempt_count += 1;
+                submitted += 1;
+                self.output.inc_progress();
+                batch_submitted += 1;
 
-                if self.config.verbose > 0 {
-                    self.output.set_status(format!("{}:{} -> {}:{}",
-                        target.host, target.port,
-                        credential.username, credential.password,
-                    ));
-                }
-
-                while let Some((result, _stop_early)) = pool.try_recv_result() {
-                    let classified = classify_error(result.error.as_deref(), result.success);
-
-                    match classified.category {
-                        ResponseCategory::AccountLocked => {
-                            lockout_events += 1;
-                        }
-                        ResponseCategory::RateLimited => {
-                            rate_limit_events += 1;
-                        }
-                        _ => {}
-                    }
-
-                    if result.success {
-                        successes_global += 1;
-                    } else if result.error.is_some() {
-                        errors_global += 1;
-                    } else {
-                        failures_global += 1;
-                    }
-
-                    if let Some(ref mut session) = self.session {
-                        let prev_count = session.total_attempts;
-                        session.mark_tested(&result.username, &result.password);
-                        if result.success {
-                            session.add_success(
-                                &result.target_host,
-                                &result.protocol,
-                                &result.username,
-                                &result.password,
-                            );
-                        }
-                        if self.config.resume_file.is_some() {
-                            let interval = self.config.checkpoint_interval as u64;
-                            if session.total_attempts / interval > prev_count / interval {
-                                if let Some(ref resume_path) = self.config.resume_file {
-                                    let _ = session.save(resume_path);
-                                }
-                            }
-                        }
-                    }
-
-                    self.output.on_result(&result);
-                    self.results.push(result);
+                // Drain results after every batch to show real-time output
+                if batch_submitted >= BATCH {
+                    drain_results(
+                        &mut result_rx, &mut self.output, &mut self.results,
+                        &mut self.session,
+                        &mut successes_global, &mut failures_global,
+                        &mut errors_global, &mut lockout_events, &mut rate_limit_events,
+                    );
+                    batch_submitted = 0;
                 }
             }
         }
 
+        // Drain remaining results after submission
+        drop(result_tx);
         pool.wait_complete().await;
-
-        while let Some((result, _stop_early)) = pool.try_recv_result() {
-            let classified = classify_error(result.error.as_deref(), result.success);
-
-            match classified.category {
-                ResponseCategory::AccountLocked => lockout_events += 1,
-                ResponseCategory::RateLimited => rate_limit_events += 1,
-                _ => {}
-            }
-
-            if result.success {
-                successes_global += 1;
-            } else if result.error.is_some() {
-                errors_global += 1;
-            } else {
-                failures_global += 1;
-            }
-
-            if let Some(ref mut session) = self.session {
-                session.mark_tested(&result.username, &result.password);
-                if result.success {
-                    session.add_success(&result.target_host, &result.protocol, &result.username, &result.password);
-                }
-                if let Some(ref resume_path) = self.config.resume_file {
-                    let _ = session.save(resume_path);
-                }
-            }
-
-            self.output.on_result(&result);
-            self.results.push(result);
-        }
+        drain_results(
+            &mut result_rx, &mut self.output, &mut self.results,
+            &mut self.session,
+            &mut successes_global, &mut failures_global,
+            &mut errors_global, &mut lockout_events, &mut rate_limit_events,
+        );
 
         if let Some(ref session) = self.session {
             if let Some(ref resume_path) = self.config.resume_file {
@@ -475,16 +431,11 @@ impl AttackOrchestrator {
             }
         }
 
-        if lockout_events > 0 {
-            log::warn!("Detected {} account lockout(s)", lockout_events);
-        }
-        if rate_limit_events > 0 {
-            log::warn!("Detected {} rate limiting event(s)", rate_limit_events);
-        }
+        if lockout_events > 0 { log::warn!("Detected {} account lockout(s)", lockout_events); }
+        if rate_limit_events > 0 { log::warn!("Detected {} rate limiting event(s)", rate_limit_events); }
 
         let end_time = Utc::now();
         let duration = end_time.signed_duration_since(start_time).to_std().unwrap_or_default();
-
         let summary = AttackSummary {
             start_time,
             end_time: Some(end_time),
@@ -519,10 +470,24 @@ impl AttackOrchestrator {
     }
 }
 
+fn empty_summary(start_time: chrono::DateTime<Utc>) -> AttackSummary {
+    AttackSummary {
+        start_time,
+        end_time: Some(Utc::now()),
+        total_targets: 0,
+        total_credentials: 0,
+        attempts: 0,
+        successes: 0,
+        failures: 0,
+        errors: 0,
+        results: vec![],
+        total_duration: Some(std::time::Duration::ZERO),
+    }
+}
+
 fn build_credentials(config: &AttackConfig, users: &[String], passwords: &[String]) -> Vec<Credential> {
     let mut credentials = Vec::with_capacity(users.len() * passwords.len());
     let max_len = config.max_password_len.unwrap_or(usize::MAX);
-
     if config.spray_mode {
         for pass in passwords {
             for user in users {
@@ -546,9 +511,5 @@ fn build_credentials(config: &AttackConfig, users: &[String], passwords: &[Strin
 }
 
 fn truncate_password(s: &str, max_len: usize) -> String {
-    if s.len() > max_len {
-        s.chars().take(max_len).collect()
-    } else {
-        s.to_string()
-    }
+    if s.len() > max_len { s.chars().take(max_len).collect() } else { s.to_string() }
 }

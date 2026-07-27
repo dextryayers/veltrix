@@ -202,12 +202,11 @@ impl Protocol for MySqlProtocol {
                 } else {
                     format!("Error code {}", err_code)
                 };
-                let is_auth = err_code == 1045;
                 Ok(AuthResult::new(
                     target.host.clone(), target.port, "mysql",
                     credential.username.clone(), credential.password.clone(),
                     false, start.elapsed(),
-                    if is_auth { None } else { Some(err_msg) },
+                    Some(format!("MySQL error {}: {}", err_code, err_msg)),
                 ))
             } else if response[0] == 0x01 {
                 Ok(AuthResult::new(

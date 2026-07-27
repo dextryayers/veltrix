@@ -123,8 +123,7 @@ fn ldap_result(target: &Target, credential: &Credential, start: Instant, result_
         };
         AuthResult::new(target.host.clone(), target.port, "ldap",
             credential.username.clone(), credential.password.clone(),
-            false, start.elapsed(),
-            if result_code == 49 { None } else { Some(err_msg.to_string()) })
+            false, start.elapsed(), Some(format!("LDAP result code {}: {}", result_code, err_msg)))
     }
 }
 

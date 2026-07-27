@@ -34,7 +34,7 @@ fn build_client(timeout_dur: Duration, proxy: &Option<ProxyConfig>) -> Result<re
 }
 
 fn is_success_status(status: u16) -> bool {
-    matches!(status, 200 | 204 | 301 | 302 | 304)
+    matches!(status, 200 | 204)
 }
 
 fn is_denied_status(status: u16) -> bool {

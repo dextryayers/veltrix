@@ -44,7 +44,7 @@ async fn imap_auth_tls(
     Ok(AuthResult::new(host.to_string(), port, "imap",
         username.to_string(), password.to_string(),
         success, start.elapsed(),
-        if success { None } else { Some("Auth denied".into()) }))
+        if success { None } else { Some(resp) }))
 }
 
 async fn imap_auth_plain(
@@ -86,7 +86,7 @@ async fn imap_auth_plain(
                     Ok(AuthResult::new(host.to_string(), port, "imap",
                         username.to_string(), password.to_string(),
                         success, start.elapsed(),
-                        if success { None } else { Some("Auth denied".into()) }))
+                        if success { None } else { Some(tresp) }))
                 }
                 Err(e) => Ok(AuthResult::new(host.to_string(), port, "imap",
                     username.to_string(), password.to_string(),
@@ -111,7 +111,7 @@ async fn imap_auth_plain(
     Ok(AuthResult::new(host.to_string(), port, "imap",
         username.to_string(), password.to_string(),
         success, start.elapsed(),
-        if success { None } else { Some("Auth denied".into()) }))
+        if success { None } else { Some(resp) }))
 }
 
 #[async_trait]

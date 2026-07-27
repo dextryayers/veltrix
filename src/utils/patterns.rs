@@ -61,6 +61,35 @@ const RATE_LIMIT_PATTERNS: &[&str] = &[
     "throttl",
 ];
 
+const PROTO_PREFIXES: &[(ResponseCategory, &[&str])] = &[
+    (ResponseCategory::AuthFailure, &[
+        "530 ", "530-", "530\t", // FTP not logged in
+        "535 ", "535-", // SMTP auth failure
+        "-ERR", " -ERR", // POP3 generic error
+        "NO ", "NO\t", " NO ", // IMAP auth denied
+        "a001 no ", "a002 no ", "a003 no ", "a004 no ", // IMAP tagged NO
+        "a001 bad ", "a002 bad ", "a003 bad ", "a004 bad ", // IMAP tagged BAD
+        "28000", "28P01", // PostgreSQL auth failure
+        "1045", // MySQL access denied
+    ]),
+    (ResponseCategory::AccountLocked, &[
+        "account locked", "account disabled", "account blocked", "account suspended",
+        "account is locked", "maximum login attempts", "too many failed",
+        "account temporarily", "account locked out",
+        "password expired", "account expired",
+        "account has been locked", "this account is locked",
+        "530 account", "535 account",
+    ]),
+    (ResponseCategory::RateLimited, &[
+        "rate limit", "too many requests", "slow down", "try again later",
+        "too many connections", "too many authentication failures",
+        "please wait", "throttl", "exceeded",
+        "421 ", "421-", // FTP too many connections
+        "452 ", "452-", // SMTP rate limited
+        "too many bad", "access denied..rate",
+    ]),
+];
+
 fn matches_any(text: &str, patterns: &[&str]) -> bool {
     let lower = text.to_lowercase();
     patterns.iter().any(|p| lower.contains(p))
@@ -78,6 +107,20 @@ pub fn classify_error(error: Option<&str>, success: bool) -> ClassifiedError {
     }
 
     let msg = error.unwrap_or("Unknown error");
+
+    for &(ref cat, ref prefixes) in PROTO_PREFIXES {
+        if prefixes.iter().any(|p| msg.contains(p)) {
+            let lockout = *cat == ResponseCategory::AccountLocked;
+            let rate = *cat == ResponseCategory::RateLimited;
+            return ClassifiedError {
+                category: cat.clone(),
+                message: msg.to_string(),
+                _retryable: rate || *cat == ResponseCategory::ProtocolError,
+                _should_backoff: lockout || rate,
+                should_rotate_proxy: lockout || rate,
+            };
+        }
+    }
 
     if matches_any(msg, LOCKOUT_PATTERNS) {
         return ClassifiedError {

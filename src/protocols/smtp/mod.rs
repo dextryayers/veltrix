@@ -87,7 +87,7 @@ async fn smtp_auth_login_tcp(
     pass_b64: &str,
     buf: &mut Vec<u8>,
     timeout_dur: Duration,
-) -> Result<bool, String> {
+) -> Result<(bool, String), String> {
     stream.write_line("AUTH LOGIN\r\n").await?;
     let auth_resp = stream.read_line(buf, timeout_dur).await?;
     if !auth_resp.starts_with("334") {
@@ -100,7 +100,7 @@ async fn smtp_auth_login_tcp(
     }
     stream.write_line(&format!("{}\r\n", pass_b64)).await?;
     let pass_resp = stream.read_line(buf, timeout_dur).await?;
-    Ok(pass_resp.starts_with("235"))
+    Ok((pass_resp.starts_with("235"), pass_resp))
 }
 
 async fn smtp_auth_login_tls(
@@ -109,7 +109,7 @@ async fn smtp_auth_login_tls(
     pass_b64: &str,
     buf: &mut Vec<u8>,
     timeout_dur: Duration,
-) -> Result<bool, String> {
+) -> Result<(bool, String), String> {
     stream.write_line("AUTH LOGIN\r\n").await?;
     let auth_resp = stream.read_line(buf, timeout_dur).await?;
     if !auth_resp.starts_with("334") {
@@ -122,7 +122,7 @@ async fn smtp_auth_login_tls(
     }
     stream.write_line(&format!("{}\r\n", pass_b64)).await?;
     let pass_resp = stream.read_line(buf, timeout_dur).await?;
-    Ok(pass_resp.starts_with("235"))
+    Ok((pass_resp.starts_with("235"), pass_resp))
 }
 
 #[async_trait]
@@ -165,23 +165,23 @@ impl Protocol for SmtpProtocol {
 
                     ehlo_tls(&mut tls_stream, &mut buf, timeout_dur).await?;
 
-                    let success = smtp_auth_login_tls(&mut tls_stream, &user_b64, &pass_b64, &mut buf, timeout_dur).await?;
+                    let (success, raw_resp) = smtp_auth_login_tls(&mut tls_stream, &user_b64, &pass_b64, &mut buf, timeout_dur).await?;
                     return Ok(AuthResult::new(
                         target.host.clone(), target.port, "smtp",
                         credential.username.clone(), credential.password.clone(),
                         success, start.elapsed(),
-                        if success { None } else { Some("Auth failed".into()) },
+                        if success { None } else { Some(raw_resp) },
                     ));
                 }
             }
 
-            let success = smtp_auth_login_tcp(&mut stream, &user_b64, &pass_b64, &mut buf, timeout_dur).await?;
+            let (success, raw_resp) = smtp_auth_login_tcp(&mut stream, &user_b64, &pass_b64, &mut buf, timeout_dur).await?;
             stream.write_line("QUIT\r\n").await.ok();
             Ok(AuthResult::new(
                 target.host.clone(), target.port, "smtp",
                 credential.username.clone(), credential.password.clone(),
                 success, start.elapsed(),
-                if success { None } else { Some("Auth failed".into()) },
+                if success { None } else { Some(raw_resp) },
             ))
         }).await;
 

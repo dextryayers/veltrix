@@ -16,12 +16,13 @@ pub struct TelnetProtocol;
 
 const SUCCESS_INDICATORS: &[&str] = &[
     "last login", "$ ", "# ", "> ", "~$ ",
-    "welcome", "shell",
+    "welcome", "shell", "successful", "logged in",
 ];
 const FAILURE_INDICATORS: &[&str] = &[
     "incorrect", "invalid", "failed", "denied", "wrong",
     "error", "try again", "unauthorized", "rejected",
-    "bad", "failed login", "login failed",
+    "bad", "failed login", "login failed", "not found",
+    "password:", "login:", "user:", "username:",
 ];
 
 async fn read_with_negotiation(
@@ -139,9 +140,10 @@ impl Protocol for TelnetProtocol {
             }
 
             let text = resp.as_str().to_lowercase();
-            let success = text.contains("last login") || text.contains("$ ")
-                || text.contains("# ") || text.contains("> ")
-                || (!FAILURE_INDICATORS.iter().any(|s| text.contains(s)) && !text.contains("assword:"));
+            let has_failure = FAILURE_INDICATORS.iter().any(|s| text.contains(s));
+            let has_shell = text.contains("last login") || text.contains("$ ")
+                || text.contains("# ") || text.contains("> ");
+            let success = has_shell || (text.contains("welcome") && !has_failure);
 
             Ok(AuthResult::new(target.host.clone(), target.port, "telnet",
                 credential.username.clone(), credential.password.clone(),

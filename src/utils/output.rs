@@ -200,18 +200,26 @@ impl LiveDashboard {
         let dt = now.duration_since(self.last_rate);
         if dt >= Duration::from_millis(800) {
             let attempted = self.total_attempts - self.last_rate_count;
-            let rate = attempted as f64 / dt.as_secs_f64();
+            let rate = if dt.as_secs_f64() > 0.0 { attempted as f64 / dt.as_secs_f64() } else { 0.0 };
             self.rate_history[self.rate_idx % 10] = rate;
             self.rate_idx += 1;
             let n = self.rate_history.iter().filter(|&&v| v > 0.0).count().max(1);
             self.current_rate = self.rate_history.iter().sum::<f64>() / n as f64;
             self.last_rate = now;
             self.last_rate_count = self.total_attempts;
-            self.update_progress();
         }
+
+        self.update_progress();
+    }
+
+    fn println_stdout(&self, msg: String) {
+        use std::io::Write;
+        let _ = writeln!(std::io::stdout(), "{}", msg);
     }
 
     pub fn on_result(&mut self, result: &AuthResult) {
+        let show_all = self.verbose >= 1;
+
         if result.success {
             self.success_count += 1;
             let msg = format!(
@@ -222,32 +230,43 @@ impl LiveDashboard {
                 result.username.green().bold(),
                 result.password.green().bold(),
             );
-            self.spinner.println(msg);
+            self.println_stdout(msg);
         } else if result.error.is_some() {
             self.error_count += 1;
-            if self.verbose >= 2 {
-                let brief = result.error.as_ref().unwrap();
-                let brief = brief.split(&['\r', '\n'][..]).next().unwrap_or(brief);
-                let msg = format!(
+            let brief = result.error.as_ref().unwrap();
+            let brief = brief.split(&['\r', '\n'][..]).next().unwrap_or(brief);
+            let msg = if self.verbose >= 2 {
+                format!(
                     "! {} {} [{}:{}] {}",
                     format!("{}:{}", result.target_host, result.target_port).dimmed(),
                     result.protocol.dimmed(),
                     result.username.yellow(),
                     result.password.dimmed(),
                     brief.dimmed(),
-                );
-                self.status_bar.println(msg);
+                )
+            } else if show_all {
+                format!(
+                    "! {} [{}:{}]",
+                    format!("{}:{}", result.target_host, result.target_port).dimmed(),
+                    result.username.dimmed(),
+                    result.password.dimmed(),
+                )
+            } else {
+                String::new()
+            };
+            if !msg.is_empty() {
+                self.println_stdout(msg);
             }
         } else {
             self.fail_count += 1;
-            if self.verbose >= 1 {
+            if show_all {
                 let msg = format!(
                     "- {} [{}:{}]",
                     format!("{}:{}", result.target_host, result.target_port).dimmed(),
                     result.username.dimmed(),
                     result.password.dimmed(),
                 );
-                self.status_bar.println(msg);
+                self.println_stdout(msg);
             }
         }
 
@@ -261,6 +280,9 @@ impl LiveDashboard {
         if let Some(ref mut file) = self.file {
             write_output(&self.format, self.writer.as_mut(), file, result);
         }
+
+        self.update_progress();
+        let _ = std::io::stdout().flush();
     }
 
     pub fn set_status(&self, msg: String) {
@@ -268,6 +290,7 @@ impl LiveDashboard {
             ">".cyan(),
             msg.white(),
         ));
+        let _ = std::io::stdout().flush();
     }
 
     pub fn finish(&mut self, summary: &AttackSummary) {

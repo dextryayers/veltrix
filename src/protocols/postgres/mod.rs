@@ -64,10 +64,9 @@ async fn pg_read_auth_response<S: tokio::io::AsyncRead + Unpin>(
             }
         }
         let err_msg = String::from_utf8_lossy(&rest);
-        let is_auth = err_msg.contains("password") || err_msg.contains("authentication") || err_msg.contains("28P01");
         Ok(AuthResult::new(host.to_string(), port, "postgres",
             username.to_string(), password.to_string(), false, start.elapsed(),
-            if is_auth { None } else { Some(err_msg.trim().to_string()) }))
+            Some(err_msg.trim().to_string())))
     } else {
         Err(format!("Unexpected response: {}", resp_type))
     }

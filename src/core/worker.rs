@@ -27,8 +27,6 @@ pub struct WorkerPool {
     proxy_failures: Arc<Mutex<Vec<u64>>>,
     skipped_users: Arc<Mutex<std::collections::HashSet<String>>>,
     tasks: JoinSet<()>,
-    result_tx: mpsc::Sender<(AuthResult, bool)>,
-    result_rx: mpsc::Receiver<(AuthResult, bool)>,
     total_submitted: Arc<AtomicU64>,
 }
 
@@ -37,7 +35,6 @@ const CHANNEL_BUF: usize = 8192;
 impl WorkerPool {
     pub fn new(config: &AttackConfig, running: Arc<AtomicBool>, proxies: Vec<ProxyConfig>) -> Self {
         let proxy_failures = Arc::new(Mutex::new(vec![0u64; proxies.len().max(1)]));
-        let (tx, rx) = mpsc::channel(CHANNEL_BUF);
         WorkerPool {
             semaphore: Arc::new(Semaphore::new(config.threads)),
             running,
@@ -48,13 +45,19 @@ impl WorkerPool {
             proxy_failures,
             skipped_users: Arc::new(Mutex::new(std::collections::HashSet::new())),
             tasks: JoinSet::new(),
-            result_tx: tx,
-            result_rx: rx,
             total_submitted: Arc::new(AtomicU64::new(0)),
         }
     }
 
     pub fn submit(&mut self, task: WorkerTask) {
+        self.submit_inner(task, None);
+    }
+
+    pub fn submit_with_sender(&mut self, task: WorkerTask, result_tx: mpsc::UnboundedSender<(AuthResult, bool)>) {
+        self.submit_inner(task, Some(result_tx));
+    }
+
+    fn submit_inner(&mut self, task: WorkerTask, external_tx: Option<mpsc::UnboundedSender<(AuthResult, bool)>>) {
         if !self.running.load(Ordering::Relaxed) {
             return;
         }
@@ -72,11 +75,11 @@ impl WorkerPool {
         let current_proxy_idx = task.attempt_index as usize;
         let target = task.target;
         let credential = task.credential;
-        let result_tx = self.result_tx.clone();
+        let external_tx = external_tx;
 
         self.tasks.spawn(async move {
             if is_skipped(&skipped, &credential.username).await {
-                let _ = result_tx.send((
+                let _ = send_result(&external_tx, (
                     AuthResult::new(
                         target.host.clone(), target.port, &target.protocol,
                         credential.username.clone(), credential.password.clone(),
@@ -91,7 +94,7 @@ impl WorkerPool {
             let handler = match get_protocol(&target.protocol) {
                 Some(h) => h,
                 None => {
-                    let _ = result_tx.send((
+                    let _ = send_result(&external_tx, (
                         AuthResult::new(
                         target.host.clone(), target.port, &target.protocol,
                         credential.username.clone(), credential.password.clone(),
@@ -112,7 +115,6 @@ impl WorkerPool {
                     break;
                 }
 
-                // Acquire semaphore permit only during authenticate call
                 let result = {
                     let _permit = semaphore.acquire().await.unwrap();
                     handler
@@ -131,7 +133,7 @@ impl WorkerPool {
 
                 if crate::utils::patterns::should_skip_user(&classified) {
                     add_skipped(&skipped, &credential.username).await;
-                    let _ = result_tx.send((
+                    let _ = send_result(&external_tx, (
                         AuthResult {
                             error: Some(format!("Account locked: {}", classified.message)),
                             ..result
@@ -160,17 +162,9 @@ impl WorkerPool {
             }
 
             if let Some(r) = last_result {
-                let _ = result_tx.send((r, stop_early)).await;
+                let _ = send_result(&external_tx, (r, stop_early)).await;
             }
         });
-    }
-
-    pub fn try_recv_result(&mut self) -> Option<(AuthResult, bool)> {
-        self.result_rx.try_recv().ok()
-    }
-
-    pub async fn recv_result(&mut self) -> Option<(AuthResult, bool)> {
-        self.result_rx.recv().await
     }
 
     pub fn submitted_count(&self) -> u64 {
@@ -179,19 +173,10 @@ impl WorkerPool {
 
     pub async fn wait_complete(&mut self) {
         while self.tasks.join_next().await.is_some() {}
-        // Drain any remaining results
-        while let Ok(r) = self.result_rx.try_recv() {
-            drop(r);
-        }
     }
 
-    pub async fn collect_all(&mut self) -> Vec<(AuthResult, bool)> {
-        while self.tasks.join_next().await.is_some() {}
-        let mut results = Vec::new();
-        while let Ok(r) = self.result_rx.try_recv() {
-            results.push(r);
-        }
-        results
+    pub fn is_idle(&self) -> bool {
+        self.tasks.is_empty()
     }
 
     fn get_proxy_for(&self, index: usize) -> Option<ProxyConfig> {
@@ -200,6 +185,12 @@ impl WorkerPool {
         } else {
             Some(self.proxies[index % self.proxies.len()].clone())
         }
+    }
+}
+
+async fn send_result(tx: &Option<mpsc::UnboundedSender<(AuthResult, bool)>>, result: (AuthResult, bool)) {
+    if let Some(ref t) = tx {
+        let _ = t.send(result);
     }
 }
 

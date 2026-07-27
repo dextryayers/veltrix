@@ -23,19 +23,37 @@ fn ntlm_hash(password: &str) -> Vec<u8> {
     Md4::digest(&to_utf16_le(password)).to_vec()
 }
 
+fn hmac_md5(key: &[u8], message: &[u8]) -> [u8; 16] {
+    const BLOCK_SIZE: usize = 64;
+    let mut k = key.to_vec();
+    if k.len() > BLOCK_SIZE {
+        let mut ctx = md5::Context::new();
+        ctx.consume(&k);
+        k = ctx.finalize().0.to_vec();
+    }
+    k.resize(BLOCK_SIZE, 0);
+    let mut ipad = vec![0u8; BLOCK_SIZE];
+    let mut opad = vec![0u8; BLOCK_SIZE];
+    for i in 0..BLOCK_SIZE {
+        ipad[i] = k[i] ^ 0x36;
+        opad[i] = k[i] ^ 0x5c;
+    }
+    let mut inner = md5::Context::new();
+    inner.consume(&ipad);
+    inner.consume(message);
+    let inner_hash = inner.finalize();
+    let mut outer = md5::Context::new();
+    outer.consume(&opad);
+    outer.consume(&*inner_hash);
+    outer.finalize().0
+}
+
 fn ntlmv2_hash(password: &str, username: &str, domain: &str) -> Vec<u8> {
-    use hmac::{Hmac, Mac, KeyInit};
-    use sha2::Sha256;
     let hash = ntlm_hash(password);
     let upper = username.to_uppercase();
     let mut ident = to_utf16_le(&upper);
     ident.extend_from_slice(&to_utf16_le(domain));
-    let mut mac = match Hmac::<Sha256>::new_from_slice(&hash) {
-        Ok(m) => m,
-        Err(_) => return Vec::new(),
-    };
-    mac.update(&ident);
-    mac.finalize().into_bytes().to_vec()
+    hmac_md5(&hash, &ident).to_vec()
 }
 
 fn build_smb2_header(command: u16, message_id: u64, session_id: u64, _body_len: u16) -> Vec<u8> {
@@ -163,14 +181,7 @@ fn build_ntlmv2_auth(
     proof_input.extend_from_slice(server_challenge);
     proof_input.extend_from_slice(&blob);
 
-    use hmac::{Hmac, Mac, KeyInit};
-    use sha2::Sha256;
-    let mut mac = match Hmac::<Sha256>::new_from_slice(&ntlmv2_hash_val) {
-        Ok(m) => m,
-        Err(_) => return Vec::new(),
-    };
-    mac.update(&proof_input);
-    let nt_proof = mac.finalize().into_bytes();
+    let nt_proof = hmac_md5(&ntlmv2_hash_val, &proof_input).to_vec();
 
     let mut ntlmv2_response = Vec::new();
     ntlmv2_response.extend_from_slice(&nt_proof);
