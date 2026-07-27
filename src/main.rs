@@ -18,7 +18,7 @@ use crate::utils::wordlist_gen::{WordlistConfig, generate_wordlist};
 use colored::Colorize;
 
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 8)]
 async fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 

@@ -66,6 +66,7 @@ pub struct LiveDashboard {
     _target_count: usize,
     _cred_count: usize,
     spinner_tag: String,
+    last_visual_update: std::cell::Cell<Instant>,
 }
 
 impl LiveDashboard {
@@ -145,10 +146,17 @@ impl LiveDashboard {
             _target_count: target_count,
             _cred_count: cred_count,
             spinner_tag: tag.to_string(),
+            last_visual_update: std::cell::Cell::new(Instant::now()),
         })
     }
 
     fn update_progress(&self) {
+        let now = Instant::now();
+        if now.duration_since(self.last_visual_update.get()) < Duration::from_millis(50) && self.total_attempts > 0 {
+            self.progress.set_position(self.total_attempts);
+            return;
+        }
+        self.last_visual_update.set(now);
         let total = (self._target_count * self._cred_count) as u64;
         self.progress.set_position(self.total_attempts);
         let elapsed = self.start_time.elapsed();

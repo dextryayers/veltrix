@@ -72,7 +72,12 @@ pub trait Protocol: Send + Sync {
 }
 
 pub fn get_protocol(name: &str) -> Option<Box<dyn Protocol>> {
-    let lower = name.to_lowercase();
+    // Fast path: avoid allocation if already lowercase
+    let lower = if name.bytes().any(|b| b.is_ascii_uppercase()) {
+        name.to_lowercase()
+    } else {
+        name.to_string()
+    };
     match lower.as_str() {
         "activemq" => Some(Box::new(activemq::ActivemqProtocol)),
         "cassandra" => Some(Box::new(cassandra::CassandraProtocol)),
@@ -122,7 +127,6 @@ pub fn get_protocol(name: &str) -> Option<Box<dyn Protocol>> {
         "squid" => Some(Box::new(squid::SquidProtocol)),
         "memcached" => Some(Box::new(memcached::MemcachedProtocol)),
         _ => {
-            // Check external plugin registry
             if let Some(entry) = crate::core::plugin::get_plugin(&lower) {
                 Some(Box::new(PluginProtocol { entry }))
             } else {
