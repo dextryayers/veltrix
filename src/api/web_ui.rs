@@ -200,10 +200,10 @@ async function startAttack() {
 
   try {
     const r = await apiPost('/attack', data);
-    showResult(`✅ Attack complete! ${r.successes} successes, ${r.failures} failures out of ${r.total_attempts} attempts. Job ID: ${r.job_id}`, 'success');
+    showResult(`Attack complete! ${r.successes} successes, ${r.failures} failures out of ${r.total_attempts} attempts. Job ID: ${r.job_id}`, 'success');
     loadJobs();
   } catch(e) {
-    showResult('❌ Error: ' + e.message, 'error');
+    showResult('Error: ' + e.message, 'error');
   }
   btn.disabled = false;
   btn.textContent = '▶ Start Attack';

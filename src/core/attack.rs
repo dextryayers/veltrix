@@ -298,6 +298,9 @@ impl AttackOrchestrator {
             self.credentials.len(),
         );
 
+        self.output.set_status(format!("Brute-forcing {} targets × {} credentials ({} total)",
+            self.targets.len(), self.credentials.len(), total_combinations));
+
         let mut pool = WorkerPool::new(&self.config, Arc::clone(&self.running), self.proxies.clone());
         let mut attempt_count = 0u64;
         let mut successes_global = 0u64;
@@ -336,7 +339,15 @@ impl AttackOrchestrator {
                     attempt_index: attempt_count,
                 });
 
+                self.output.inc_progress();
                 attempt_count += 1;
+
+                if self.config.verbose > 0 {
+                    self.output.set_status(format!("{}:{} -> {}:{}",
+                        target.host, target.port,
+                        credential.username, credential.password,
+                    ));
+                }
 
                 while let Some((result, _stop_early)) = pool.try_recv_result() {
                     let classified = classify_error(result.error.as_deref(), result.success);

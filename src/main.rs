@@ -379,7 +379,7 @@ async fn run_create(args: &CreateArgs) {
                 std::process::exit(1);
             });
             println!("  {} Generated {} candidates -> {}",
-                "✓".green(), words.len(), path.display());
+                "+".green(), words.len(), path.display());
         }
         None => {
             for w in &words {

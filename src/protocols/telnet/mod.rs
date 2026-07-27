@@ -99,7 +99,7 @@ impl Protocol for TelnetProtocol {
 
                 // Wait for password prompt
                 let mut pw_buf = alloc_read_buf();
-                let pw_read = timeout(Duration::from_secs(2), async {
+                let _pw_read = timeout(Duration::from_secs(2), async {
                     let mut total = 0usize;
                     loop {
                         match stream.read(&mut pw_buf[total..]).await {

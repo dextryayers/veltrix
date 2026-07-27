@@ -285,7 +285,7 @@ impl ConfigFile {
             config.stop_on_first = v;
         }
         if let Some(v) = b.verbose {
-            config.verbose = v;
+            config.verbose = if v { 1 } else { 0 };
         }
         if let Some(v) = b.quiet {
             config.quiet = v;
@@ -348,7 +348,7 @@ mod tests {
             resume_file: None,
             config_file: None,
             checkpoint_interval: 100,
-            verbose: false,
+            verbose: 0,
             quiet: false,
             no_banner: false,
             single_user_mode: false,

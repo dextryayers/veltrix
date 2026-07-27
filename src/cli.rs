@@ -368,7 +368,7 @@ impl Cli {
             http_userfield: args.http_userfield.clone(),
             http_passfield: args.http_passfield.clone(),
             http_success: args.http_success.clone(),
-            verbose: self.verbose > 0,
+            verbose: self.verbose,
             quiet: false,
             no_banner: false,
             single_user_mode: false,

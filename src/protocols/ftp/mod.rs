@@ -12,27 +12,6 @@ use crate::proxy::ProxyConfig;
 use super::Protocol;
 use super::tcp::{connect_optimized, tune_tcp, alloc_read_buf};
 
-fn ftp_read_line(stream: &mut (impl AsyncReadExt + Unpin), buf: &mut Vec<u8>) -> impl std::future::Future<Output = Result<usize, String>> {
-    buf.clear();
-    async {
-        let mut tmp = [0u8; 1];
-        let mut total = 0usize;
-        loop {
-            match stream.read(&mut tmp).await {
-                Ok(0) => break,
-                Ok(_) => {
-                    buf.push(tmp[0]);
-                    total += 1;
-                    if tmp[0] == b'\n' { break; }
-                    if total >= 4096 { break; }
-                }
-                Err(_) => break,
-            }
-        }
-        if total == 0 { Err("No data".into()) } else { Ok(total) }
-    }
-}
-
 async fn ftp_auth_inner(
     stream: &mut (impl AsyncReadExt + AsyncWriteExt + Unpin),
     host: &str, port: u16, credential: &Credential, start: Instant,

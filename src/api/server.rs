@@ -403,7 +403,7 @@ async fn handle_client(
                 http_userfield: None,
                 http_passfield: None,
                 http_success: None,
-                verbose: false,
+                verbose: 0,
                 quiet: false,
                 no_banner: true,
                 single_user_mode: false,

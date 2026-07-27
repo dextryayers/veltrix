@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,7 +28,6 @@ pub struct WorkerPool {
     tasks: Vec<tokio::task::JoinHandle<()>>,
     result_tx: mpsc::UnboundedSender<(AuthResult, bool)>,
     result_rx: mpsc::UnboundedReceiver<(AuthResult, bool)>,
-    dns_cache: Arc<std::sync::Mutex<HashMap<String, Option<SocketAddr>>>>,
     total_submitted: Arc<std::sync::atomic::AtomicU64>,
 }
 
@@ -50,7 +47,6 @@ impl WorkerPool {
             tasks: Vec::new(),
             result_tx: tx,
             result_rx: rx,
-            dns_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
             total_submitted: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
@@ -73,9 +69,7 @@ impl WorkerPool {
         let current_proxy_idx = task.attempt_index as usize;
         let target = task.target;
         let credential = task.credential;
-        let protocol = target.protocol.clone();
         let result_tx = self.result_tx.clone();
-        let _dns_cache = Arc::clone(&self.dns_cache);
 
         let handle = tokio::spawn(async move {
             let _permit = semaphore.acquire().await.unwrap();
@@ -89,7 +83,7 @@ impl WorkerPool {
             if is_skipped {
                 let _ = result_tx.send((
                     AuthResult::new(
-                        target.host, target.port, &protocol,
+                        target.host, target.port, &target.protocol,
                         credential.username, credential.password,
                         false, Duration::ZERO,
                         Some("Skipped (account locked)".into()),
@@ -99,15 +93,15 @@ impl WorkerPool {
                 return;
             }
 
-            let handler = match get_protocol(&protocol) {
+            let handler = match get_protocol(&target.protocol) {
                 Some(h) => h,
                 None => {
                     let _ = result_tx.send((
                         AuthResult::new(
-                            target.host, target.port, &protocol,
-                            credential.username, credential.password,
+                        target.host, target.port, &target.protocol,
+                        credential.username, credential.password,
                             false, Duration::ZERO,
-                            Some(format!("Unsupported protocol: {}", protocol)),
+                            Some(format!("Unsupported protocol: {}", target.protocol)),
                         ),
                         stop_early,
                     ));

@@ -33,7 +33,7 @@ pub struct AttackConfig {
     #[allow(dead_code)]
     pub config_file: Option<PathBuf>,
     pub checkpoint_interval: u64,
-    pub verbose: bool,
+    pub verbose: u8,
     pub quiet: bool,
     pub no_banner: bool,
     pub single_user_mode: bool,
@@ -186,7 +186,7 @@ mod tests {
             resume_file: None,
             config_file: None,
             checkpoint_interval: 100,
-            verbose: false,
+            verbose: 0,
             quiet: false,
             no_banner: false,
             single_user_mode: false,
