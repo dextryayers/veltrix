@@ -3,6 +3,7 @@ pub mod cidr;
 pub mod config;
 pub mod config_loader;
 pub mod credential;
+pub mod engine;
 pub mod error;
 pub mod plugin;
 pub mod result;

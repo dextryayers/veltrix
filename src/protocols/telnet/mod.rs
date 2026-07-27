@@ -6,10 +6,10 @@ use tokio::io::{AsyncWriteExt, AsyncReadExt};
 use tokio::time::timeout;
 
 use crate::core::credential::Credential;
+use crate::core::engine::{connect_tcp, ResponseBuffer};
 use crate::core::result::AuthResult;
 use crate::core::target::Target;
 use crate::proxy::ProxyConfig;
-use super::tcp::{connect_optimized, tune_tcp, alloc_read_buf};
 use super::Protocol;
 
 pub struct TelnetProtocol;
@@ -26,15 +26,15 @@ const FAILURE_INDICATORS: &[&str] = &[
 
 async fn read_with_negotiation(
     stream: &mut tokio::net::TcpStream,
-    buf: &mut Vec<u8>,
     timeout_dur: Duration,
     stop_chars: &[char],
-) -> Result<usize, String> {
+) -> Result<ResponseBuffer, String> {
     let start = tokio::time::Instant::now();
-    let mut total = 0usize;
+    let mut resp = ResponseBuffer::new();
     loop {
-        let remaining = timeout_dur.saturating_sub(start.elapsed());
-        if remaining.is_zero() { break; }
+        let elapsed = start.elapsed();
+        if elapsed >= timeout_dur { break; }
+        let remaining = timeout_dur - elapsed;
         let mut byte = [0u8; 1];
         match timeout(remaining, stream.read(&mut byte)).await {
             Ok(Ok(0)) => break,
@@ -44,28 +44,24 @@ async fn read_with_negotiation(
                     if stream.read_exact(&mut iac).await.is_ok() {
                         match iac[0] {
                             253 | 251 => {
-                                let resp = [255, if iac[0] == 253 { 252 } else { 254 }, iac[1]];
-                                stream.write_all(&resp).await.ok();
+                                let resp_bytes = [255, if iac[0] == 253 { 252 } else { 254 }, iac[1]];
+                                stream.write_all(&resp_bytes).await.ok();
                             }
                             _ => {}
                         }
                     }
                 } else {
-                    if total < buf.len() {
-                        buf[total] = byte[0];
-                    }
-                    total += 1;
+                    resp.extend(&byte);
                     let c = byte[0] as char;
                     if stop_chars.contains(&c) {
                         break;
                     }
                 }
             }
-            Ok(Err(_)) => break,
-            Err(_) => break,
+            Ok(Err(_)) | Err(_) => break,
         }
     }
-    Ok(total)
+    Ok(resp)
 }
 
 #[async_trait]
@@ -83,70 +79,49 @@ impl Protocol for TelnetProtocol {
         let start = Instant::now();
 
         match timeout(timeout_dur, async {
-            let mut stream = match proxy {
-                Some(p) => {
-                    let s = p.tcp_connect(&target.addr_string(), timeout_dur).await
-                        .map_err(|e| format!("Proxy connect: {}", e))?;
-                    tune_tcp(&s);
-                    s
-                },
-                None => connect_optimized(&target.addr_string(), timeout_dur).await
-                    .map_err(|e| format!("Connect: {}", e))?,
-            };
+            let mut stream = connect_tcp(&target.addr_string(), timeout_dur, proxy).await?;
 
-            let mut buf = alloc_read_buf();
+            let banner = read_with_negotiation(
+                stream.get_mut(), Duration::from_secs(3), &[':'],
+            ).await?;
 
-            // Wait for login prompt (max 3s, stop at ':' or "login" or "user")
-            let banner_len = read_with_negotiation(
-                &mut stream, &mut buf, Duration::from_secs(3), &[':'],
-            ).await.map_err(|e| e)?;
+            let initial = banner.as_str().to_lowercase();
 
-            let initial = String::from_utf8_lossy(&buf[..banner_len]);
-            let initial_lower = initial.to_lowercase();
-
-            if initial_lower.contains("password:") {
-                // Direct password-only prompt
-                stream.write_all(format!("{}\r\n", credential.password).as_bytes()).await.map_err(|e| e.to_string())?;
-                stream.flush().await.map_err(|e| e.to_string())?;
+            if initial.contains("password:") {
+                stream.write_line(&format!("{}\r\n", credential.password)).await?;
             } else {
-                // Send username
-                stream.write_all(format!("{}\r\n", credential.username).as_bytes()).await.map_err(|e| e.to_string())?;
-                stream.flush().await.map_err(|e| e.to_string())?;
+                stream.write_line(&format!("{}\r\n", credential.username)).await?;
 
-                // Wait for password prompt (max 1.5s, stop at ':' or "assword")
-                let mut pw_buf = alloc_read_buf();
-                let pw_len = read_with_negotiation(
-                    &mut stream, &mut pw_buf, Duration::from_millis(1500), &[':'],
-                ).await.map_err(|e| e)?;
+                let pw_prompt = read_with_negotiation(
+                    stream.get_mut(), Duration::from_millis(1500), &[':'],
+                ).await?;
 
-                let pw_prompt = String::from_utf8_lossy(&pw_buf[..pw_len]);
-                if !pw_prompt.to_lowercase().contains("assword") && !pw_prompt.contains(':') {
-                    // No password prompt detected, might be on wrong path
+                let pw_text = pw_prompt.as_str().to_lowercase();
+                if !pw_text.contains("assword") && !pw_text.contains(':') {
                     return Ok(AuthResult::new(target.host.clone(), target.port, "telnet",
                         credential.username.clone(), credential.password.clone(),
                         false, start.elapsed(), Some("No password prompt".into())));
                 }
 
-                stream.write_all(format!("{}\r\n", credential.password).as_bytes()).await.map_err(|e| e.to_string())?;
-                stream.flush().await.map_err(|e| e.to_string())?;
+                stream.write_line(&format!("{}\r\n", credential.password)).await?;
             }
 
-            // Read response (max 2s)
-            let mut resp = String::new();
-            let mut resp_buf = alloc_read_buf();
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+            // Read response
+            let mut resp = ResponseBuffer::new();
+            let response_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
             loop {
-                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                let remaining = response_deadline.saturating_duration_since(tokio::time::Instant::now());
                 if remaining.is_zero() { break; }
-                match timeout(remaining, stream.read(&mut resp_buf)).await {
+                let mut byte = [0u8; 1];
+                match timeout(remaining, stream.get_mut().read(&mut byte)).await {
                     Ok(Ok(n)) if n > 0 => {
-                        // Filter IAC bytes from response
-                        let clean: Vec<u8> = resp_buf[..n].iter().copied().filter(|&b| b != 255).collect();
-                        resp.push_str(&String::from_utf8_lossy(&clean));
-                        let resp_lower = resp.to_lowercase();
+                        if byte[0] != 255 {
+                            resp.extend(&byte);
+                        }
+                        let text = resp.as_str().to_lowercase();
 
-                        let has_success = SUCCESS_INDICATORS.iter().any(|s| resp_lower.contains(s));
-                        let has_failure = FAILURE_INDICATORS.iter().any(|s| resp_lower.contains(s));
+                        let has_success = SUCCESS_INDICATORS.iter().any(|s| text.contains(s));
+                        let has_failure = FAILURE_INDICATORS.iter().any(|s| text.contains(s));
 
                         if has_success && !has_failure {
                             return Ok(AuthResult::new(target.host.clone(), target.port, "telnet",
@@ -156,22 +131,22 @@ impl Protocol for TelnetProtocol {
                         if has_failure {
                             return Ok(AuthResult::new(target.host.clone(), target.port, "telnet",
                                 credential.username.clone(), credential.password.clone(),
-                                false, start.elapsed(), Some(resp.trim().to_string())));
+                                false, start.elapsed(), Some(resp.as_str().to_string())));
                         }
                     }
                     _ => break,
                 }
             }
 
-            let resp_lower = resp.to_lowercase();
-            let success = resp_lower.contains("last login") || resp_lower.contains("$ ")
-                || resp_lower.contains("# ") || resp_lower.contains("> ")
-                || (!FAILURE_INDICATORS.iter().any(|s| resp_lower.contains(s)) && !resp_lower.contains("assword:"));
+            let text = resp.as_str().to_lowercase();
+            let success = text.contains("last login") || text.contains("$ ")
+                || text.contains("# ") || text.contains("> ")
+                || (!FAILURE_INDICATORS.iter().any(|s| text.contains(s)) && !text.contains("assword:"));
 
             Ok(AuthResult::new(target.host.clone(), target.port, "telnet",
                 credential.username.clone(), credential.password.clone(),
                 success, start.elapsed(),
-                if success { None } else { Some(resp.trim().to_string()) }))
+                if success { None } else { Some(resp.as_str().to_string()) }))
         }).await {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => AuthResult::new(target.host.clone(), target.port, "telnet",

@@ -302,7 +302,14 @@ impl HttpProtocol {
         {
             Ok(resp) => {
                 let status = resp.status().as_u16();
-                let text = resp.text().await.unwrap_or_default().to_lowercase();
+                let text = match resp.text().await {
+                    Ok(t) => t.to_lowercase(),
+                    Err(e) => return AuthResult::new(
+                        target.host.clone(), target.port, "http-form",
+                        credential.username.clone(), credential.password.clone(),
+                        false, start.elapsed(), Some(format!("Read body error: {}", e)),
+                    ),
+                };
                 let success_str = HTTP_SUCCESS.get().map(|s| s.as_str()).unwrap_or("");
 
                 let has_error = if success_str.is_empty() {

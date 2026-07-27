@@ -21,7 +21,8 @@ async fn try_cmd(
 ) -> Result<String, String> {
     writer.write_all(cmd.as_bytes()).await
         .map_err(|e| format!("Write cmd: {}", e))?;
-    writer.flush().await.ok();
+    writer.flush().await
+        .map_err(|e| format!("Flush cmd: {}", e))?;
     let mut buf = String::new();
     reader.read_line(&mut buf).await
         .map_err(|e| format!("Read resp: {}", e))?;
@@ -117,7 +118,8 @@ impl Protocol for RedisProtocol {
                     let cmd = "PING\r\n";
                     writer.write_all(cmd.as_bytes()).await
                         .map_err(|e| format!("Write cmd: {}", e))?;
-                    writer.flush().await.ok();
+                    writer.flush().await
+                        .map_err(|e| format!("Flush PING: {}", e))?;
                     let mut buf = String::new();
                     reader.read_line(&mut buf).await
                         .map_err(|e| format!("Read resp: {}", e))?;
@@ -134,7 +136,8 @@ impl Protocol for RedisProtocol {
                     let cmd = format!("AUTH {} {}\r\n", credential.username, credential.password);
                     writer.write_all(cmd.as_bytes()).await
                         .map_err(|e| format!("Write cmd: {}", e))?;
-                    writer.flush().await.ok();
+                    writer.flush().await
+                        .map_err(|e| format!("Flush AUTH: {}", e))?;
                     let mut buf = String::new();
                     reader.read_line(&mut buf).await
                         .map_err(|e| format!("Read resp: {}", e))?;
@@ -152,7 +155,8 @@ impl Protocol for RedisProtocol {
                         let cmd = format!("AUTH {}\r\n", credential.password);
                         writer.write_all(cmd.as_bytes()).await
                             .map_err(|e| format!("Write cmd: {}", e))?;
-                        writer.flush().await.ok();
+                    writer.flush().await
+                        .map_err(|e| format!("Flush AUTH: {}", e))?;
                         let mut buf = String::new();
                         reader.read_line(&mut buf).await
                             .map_err(|e| format!("Read resp: {}", e))?;

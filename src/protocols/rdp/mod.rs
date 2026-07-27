@@ -63,7 +63,8 @@ impl Protocol for RdpProtocol {
 
             stream.write_all(RDP_NEG_REQ).await
                 .map_err(|e| format!("Send neg req: {}", e))?;
-            stream.flush().await.ok();
+            stream.flush().await
+                .map_err(|e| format!("Flush neg req: {}", e))?;
 
             let mut buf = alloc_read_buf();
             let n = stream.read(&mut buf).await
@@ -91,7 +92,7 @@ impl Protocol for RdpProtocol {
             let tls_stream = connector.connect(&target.host, stream).await
                 .map_err(|e| format!("TLS connect: {}", e))?;
 
-            Ok(auth::perform_credssp_exchange(tls_stream, target, credential, start).await)
+            Ok(auth::perform_credssp_exchange(tls_stream, target, credential, start, timeout_dur).await)
         }).await;
 
         match result {

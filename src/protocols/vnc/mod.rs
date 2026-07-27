@@ -76,7 +76,8 @@ impl Protocol for VncProtocol {
 
             stream.write_all(RFB_VERSION).await
                 .map_err(|e| format!("Send version: {}", e))?;
-            stream.flush().await.ok();
+            stream.flush().await
+                .map_err(|e| format!("Flush version: {}", e))?;
 
             let mut sec_count = [0u8; 1];
             stream.read_exact(&mut sec_count).await
@@ -129,7 +130,8 @@ impl Protocol for VncProtocol {
                 let response = vnc_des_encrypt(&challenge, &pass);
                 stream.write_all(&response).await
                     .map_err(|e| format!("Send response: {}", e))?;
-                stream.flush().await.ok();
+                stream.flush().await
+                    .map_err(|e| format!("Flush response: {}", e))?;
 
                 let mut sec_result = [0u8; 4];
                 stream.read_exact(&mut sec_result).await

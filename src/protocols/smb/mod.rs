@@ -367,7 +367,8 @@ impl Protocol for SmbProtocol {
             let nego_req = build_negotiate_request();
             stream.write_all(&nego_req).await
                 .map_err(|e| format!("Send negotiate: {}", e))?;
-            stream.flush().await.ok();
+            stream.flush().await
+                .map_err(|e| format!("Flush negotiate: {}", e))?;
 
             read_smb2_response(&mut stream).await?;
 
@@ -379,7 +380,8 @@ impl Protocol for SmbProtocol {
 
             stream.write_all(&setup1).await
                 .map_err(|e| format!("Send session setup 1: {}", e))?;
-            stream.flush().await.ok();
+            stream.flush().await
+                .map_err(|e| format!("Flush setup1: {}", e))?;
 
             let (status1, challenge_blob) = read_smb2_response(&mut stream).await?;
 
@@ -411,7 +413,8 @@ impl Protocol for SmbProtocol {
             let setup2 = build_session_setup(&auth_token, 3, 0);
             stream.write_all(&setup2).await
                 .map_err(|e| format!("Send session setup 2: {}", e))?;
-            stream.flush().await.ok();
+            stream.flush().await
+                .map_err(|e| format!("Flush setup2: {}", e))?;
 
             let (status2, _final_blob) = read_smb2_response(&mut stream).await?;
 

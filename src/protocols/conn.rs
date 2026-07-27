@@ -61,7 +61,8 @@ pub async fn write_line(stream: &mut TcpStream, line: &str) -> Result<(), String
         .write_all(line.as_bytes())
         .await
         .map_err(|e| format!("Write: {}", e))?;
-    stream.flush().await.ok();
+    stream.flush().await
+        .map_err(|e| format!("Flush: {}", e))?;
     Ok(())
 }
 
@@ -122,7 +123,8 @@ pub async fn write_line_tls(
         .write_all(line.as_bytes())
         .await
         .map_err(|e| format!("TLS write: {}", e))?;
-    tls_stream.flush().await.ok();
+    tls_stream.flush().await
+        .map_err(|e| format!("TLS flush: {}", e))?;
     Ok(())
 }
 

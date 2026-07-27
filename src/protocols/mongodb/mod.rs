@@ -271,7 +271,8 @@ impl Protocol for MongoDbProtocol {
             let query = build_op_query("admin.$cmd", &get_nonce);
             stream.write_all(&query).await
                 .map_err(|e| format!("Send getNonce: {}", e))?;
-            stream.flush().await.ok();
+            stream.flush().await
+                .map_err(|e| format!("Flush: {}", e))?;
 
             let doc = read_op_reply(&mut stream, timeout_dur).await?;
             let nonce = bson_find_string(&doc, "nonce")
@@ -293,7 +294,8 @@ impl Protocol for MongoDbProtocol {
 
             stream.write_all(&auth_query).await
                 .map_err(|e| format!("Send auth: {}", e))?;
-            stream.flush().await.ok();
+            stream.flush().await
+                .map_err(|e| format!("Flush: {}", e))?;
 
             let auth_resp = read_op_reply(&mut stream, timeout_dur).await?;
             let ok = bson_find_int(&auth_resp, "ok").unwrap_or(0);
