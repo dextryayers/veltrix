@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use native_tls::TlsConnector as NativeTlsConnector;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_native_tls::TlsConnector;
 
@@ -10,6 +9,7 @@ use crate::core::credential::Credential;
 use crate::core::result::AuthResult;
 use crate::core::target::Target;
 use crate::proxy::ProxyConfig;
+use super::tcp::{connect_optimized, tune_tcp};
 use super::Protocol;
 
 pub struct RedisProtocol;
@@ -91,14 +91,14 @@ impl Protocol for RedisProtocol {
         match timeout(timeout_dur, async {
             let addr = target.addr_string();
             let stream = match proxy {
-                Some(p) => p.tcp_connect(&addr, timeout_dur).await
-                    .map_err(|e| format!("Proxy connect: {}", e))?,
-                None => {
-                    let s = TcpStream::connect(&addr).await
-                        .map_err(|e| format!("Connect: {}", e))?;
-                    s.set_nodelay(true).ok();
+                Some(p) => {
+                    let s = p.tcp_connect(&addr, timeout_dur).await
+                        .map_err(|e| format!("Proxy connect: {}", e))?;
+                    tune_tcp(&s);
                     s
                 },
+                None => connect_optimized(&addr, timeout_dur).await
+                    .map_err(|e| format!("Connect: {}", e))?,
             };
 
             if use_tls {

@@ -5,7 +5,6 @@ use async_trait::async_trait;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tokio::time::timeout;
 
 use crate::core::credential::Credential;
@@ -13,6 +12,7 @@ use crate::core::result::AuthResult;
 use crate::core::target::Target;
 use crate::proxy::ProxyConfig;
 use super::Protocol;
+use super::tcp::{connect_optimized, tune_tcp, alloc_read_buf};
 
 pub struct RdpProtocol;
 
@@ -52,21 +52,20 @@ impl Protocol for RdpProtocol {
 
         let result = timeout(timeout_dur, async {
             let mut stream = match proxy {
-                Some(p) => p.tcp_connect(&addr, timeout_dur).await
-                    .map_err(|e| format!("Connect: {}", e))?,
-                None => {
-                    let s = TcpStream::connect(&addr).await
+                Some(p) => {
+                    let s = p.tcp_connect(&addr, timeout_dur).await
                         .map_err(|e| format!("Connect: {}", e))?;
-                    s.set_nodelay(true).ok();
+                    tune_tcp(&s);
                     s
                 },
+                None => connect_optimized(&addr, timeout_dur).await?,
             };
 
             stream.write_all(RDP_NEG_REQ).await
                 .map_err(|e| format!("Send neg req: {}", e))?;
             stream.flush().await.ok();
 
-            let mut buf = vec![0u8; 1024];
+            let mut buf = alloc_read_buf();
             let n = stream.read(&mut buf).await
                 .map_err(|e| format!("Read neg resp: {}", e))?;
 

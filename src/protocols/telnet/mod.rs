@@ -2,14 +2,14 @@ pub mod negotiation;
 
 use async_trait::async_trait;
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, AsyncReadExt};
-use tokio::net::TcpStream;
+use tokio::io::{AsyncWriteExt, AsyncReadExt};
 use tokio::time::timeout;
 
 use crate::core::credential::Credential;
 use crate::core::result::AuthResult;
 use crate::core::target::Target;
 use crate::proxy::ProxyConfig;
+use super::tcp::{connect_optimized, tune_tcp, alloc_read_buf};
 use super::Protocol;
 
 pub struct TelnetProtocol;
@@ -40,17 +40,18 @@ impl Protocol for TelnetProtocol {
 
         match timeout(timeout_dur, async {
             let mut stream = match proxy {
-                Some(p) => p.tcp_connect(&target.addr_string(), timeout_dur).await
-                    .map_err(|e| format!("Proxy connect: {}", e))?,
-                None => {
-                    let s = TcpStream::connect(target.addr_string()).await.map_err(|e| e.to_string())?;
-                    s.set_nodelay(true).ok();
+                Some(p) => {
+                    let s = p.tcp_connect(&target.addr_string(), timeout_dur).await
+                        .map_err(|e| format!("Proxy connect: {}", e))?;
+                    tune_tcp(&s);
                     s
                 },
+                None => connect_optimized(&target.addr_string(), timeout_dur).await
+                    .map_err(|e| format!("Connect: {}", e))?,
             };
 
             // Read initial data and handle telnet negotiation
-            let mut buf = vec![0u8; 8192];
+            let mut buf = alloc_read_buf();
             let banner_read = timeout(Duration::from_secs(2), async {
                 let mut total = 0usize;
                 loop {
@@ -97,7 +98,7 @@ impl Protocol for TelnetProtocol {
                 tokio::time::sleep(Duration::from_millis(200)).await;
 
                 // Wait for password prompt
-                let mut pw_buf = vec![0u8; 8192];
+                let mut pw_buf = alloc_read_buf();
                 let pw_read = timeout(Duration::from_secs(2), async {
                     let mut total = 0usize;
                     loop {
@@ -123,7 +124,7 @@ impl Protocol for TelnetProtocol {
 
             // Read auth response - collect all data with timeout
             let mut resp = String::new();
-            let mut resp_buf = vec![0u8; 8192];
+            let mut resp_buf = alloc_read_buf();
             let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
             loop {
                 let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());

@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use native_tls::TlsConnector as NativeTlsConnector;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_native_tls::TlsConnector;
 
@@ -10,6 +9,7 @@ use crate::core::credential::Credential;
 use crate::core::result::AuthResult;
 use crate::core::target::Target;
 use crate::proxy::ProxyConfig;
+use super::tcp::{connect_optimized, tune_tcp, alloc_read_buf};
 use super::Protocol;
 
 pub struct SmtpProtocol;
@@ -91,14 +91,14 @@ impl Protocol for SmtpProtocol {
 
         let connect_result = match timeout(timeout_dur, async {
             let stream = match proxy {
-                Some(p) => p.tcp_connect(&addr, timeout_dur).await
-                    .map_err(|e| format!("Proxy connect: {}", e))?,
-                None => {
-                    let s = TcpStream::connect(&addr).await
-                        .map_err(|e| format!("Connect: {}", e))?;
-                    s.set_nodelay(true).ok();
+                Some(p) => {
+                    let s = p.tcp_connect(&addr, timeout_dur).await
+                        .map_err(|e| format!("Proxy connect: {}", e))?;
+                    tune_tcp(&s);
                     s
                 },
+                None => connect_optimized(&addr, timeout_dur).await
+                    .map_err(|e| format!("Connect: {}", e))?,
             };
 
             let (reader, mut writer) = stream.into_split();
@@ -120,8 +120,8 @@ impl Protocol for SmtpProtocol {
 
             // Try STARTTLS if advertised
             let supports_starttls = caps.iter().any(|c| c == "STARTTLS");
-            let tls_used = if supports_starttls && target.port != 465 {
-                let mut tls_buf = vec![0u8; 4096];
+            let _tls_used = if supports_starttls && target.port != 465 {
+                let mut tls_buf = alloc_read_buf();
                 writer.write_all(b"STARTTLS\r\n").await.ok();
                 writer.flush().await.ok();
                 buf.clear();
@@ -131,14 +131,14 @@ impl Protocol for SmtpProtocol {
                     drop(buf_reader);
                     drop(writer);
                     let new_stream = match proxy {
-                        Some(p) => p.tcp_connect(&addr, timeout_dur).await
-                            .map_err(|e| format!("Proxy connect: {}", e))?,
-                        None => {
-                            let s = TcpStream::connect(&addr).await
-                                .map_err(|e| format!("Connect: {}", e))?;
-                            s.set_nodelay(true).ok();
+                        Some(p) => {
+                            let s = p.tcp_connect(&addr, timeout_dur).await
+                                .map_err(|e| format!("Proxy connect: {}", e))?;
+                            tune_tcp(&s);
                             s
                         },
+                        None => connect_optimized(&addr, timeout_dur).await
+                            .map_err(|e| format!("Connect: {}", e))?,
                     };
                     let connector = TlsConnector::from(
                         NativeTlsConnector::builder().build()
@@ -250,7 +250,7 @@ async fn smtp_tls_auth(
     start: Instant,
 ) -> Result<AuthResult, String> {
     use tokio::io::AsyncReadExt;
-    let mut tls_buf = vec![0u8; 4096];
+    let mut tls_buf = alloc_read_buf();
 
     let auth_user = base64_encode(&credential.username);
     let auth_pass = base64_encode(&credential.password);

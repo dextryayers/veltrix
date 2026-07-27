@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
+use super::tcp::alloc_read_buf;
 
 use crate::core::credential::Credential;
 use crate::core::result::AuthResult;
@@ -231,7 +232,7 @@ impl Protocol for SnmpProtocol {
             socket.send(&packet).await
                 .map_err(|e| format!("Send SNMP: {}", e))?;
 
-            let mut buf = vec![0u8; 65535];
+            let mut buf = alloc_read_buf();
             let n = tokio::time::timeout(
                 Duration::from_secs(5),
                 socket.recv(&mut buf),

@@ -11,6 +11,7 @@ use crate::core::result::AuthResult;
 use crate::core::target::Target;
 use crate::proxy::ProxyConfig;
 use super::Protocol;
+use super::tcp::{connect_optimized, tune_tcp, alloc_read_buf};
 
 pub struct Pop3Protocol;
 
@@ -33,7 +34,7 @@ async fn pop3_auth_tls(
         .map_err(|e| format!("USER cmd: {}", e))?;
     tls_stream.flush().await.ok();
 
-    let mut buf = vec![0u8; 4096];
+    let mut buf = alloc_read_buf();
     let n = tls_stream.read(&mut buf).await
         .map_err(|e| format!("USER resp: {}", e))?;
     let user_resp = String::from_utf8_lossy(&buf[..n]);
@@ -49,7 +50,7 @@ async fn pop3_auth_tls(
         .map_err(|e| format!("PASS cmd: {}", e))?;
     tls_stream.flush().await.ok();
 
-    let mut buf = vec![0u8; 4096];
+    let mut buf = alloc_read_buf();
     let n = tls_stream.read(&mut buf).await
         .map_err(|e| format!("PASS resp: {}", e))?;
     let pass_resp = String::from_utf8_lossy(&buf[..n]);
@@ -71,7 +72,7 @@ async fn pop3_auth_plain(
     start: Instant,
     stream: TcpStream,
 ) -> Result<AuthResult, String> {
-    let mut buf = vec![0u8; 4096];
+    let mut buf = alloc_read_buf();
 
     stream.readable().await.ok();
     let n = stream.try_read(&mut buf).unwrap_or(0);
@@ -101,7 +102,7 @@ async fn pop3_auth_plain(
                 tls_stream.write_all(format!("USER {}\r\n", username).as_bytes()).await
                     .map_err(|e| format!("USER cmd: {}", e))?;
                 tls_stream.flush().await.ok();
-                let mut tb = vec![0u8; 4096];
+                let mut tb = alloc_read_buf();
                 let n = tls_stream.read(&mut tb).await
                     .map_err(|e| format!("USER resp: {}", e))?;
                 let user_resp = String::from_utf8_lossy(&tb[..n]);
@@ -138,7 +139,7 @@ async fn pop3_auth_plain(
 
     let (reader, mut writer) = stream.into_split();
     let mut buf_reader = BufReader::new(reader);
-    let mut buf = Vec::new();
+    let mut buf = alloc_read_buf();
 
     writer.write_all(format!("USER {}\r\n", username).as_bytes()).await
         .map_err(|e| format!("USER cmd: {}", e))?;
@@ -198,14 +199,13 @@ impl Protocol for Pop3Protocol {
 
         match timeout(timeout_dur, async {
             let stream = match proxy {
-                Some(p) => p.tcp_connect(&addr, timeout_dur).await
-                    .map_err(|e| format!("Connect: {}", e))?,
-                None => {
-                    let s = TcpStream::connect(&addr).await
+                Some(p) => {
+                    let s = p.tcp_connect(&addr, timeout_dur).await
                         .map_err(|e| format!("Connect: {}", e))?;
-                    s.set_nodelay(true).ok();
+                    tune_tcp(&s);
                     s
                 },
+                None => connect_optimized(&addr, timeout_dur).await?,
             };
 
             if use_tls {

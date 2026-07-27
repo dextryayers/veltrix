@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use std::time::{Duration, Instant};
 use ssh2::Session;
-use tokio::net::TcpStream;
 use tokio::time::timeout;
 
 use crate::core::credential::Credential;
@@ -9,18 +8,14 @@ use crate::core::result::AuthResult;
 use crate::core::target::Target;
 use crate::proxy::ProxyConfig;
 use super::Protocol;
+use super::tcp::{connect_optimized, tune_tcp};
 
 pub struct SshProtocol;
 
 #[async_trait]
 impl Protocol for SshProtocol {
-    fn name(&self) -> &'static str {
-        "ssh"
-    }
-
-    fn default_port(&self) -> u16 {
-        22
-    }
+    fn name(&self) -> &'static str { "ssh" }
+    fn default_port(&self) -> u16 { 22 }
 
     async fn authenticate(
         &self,
@@ -34,14 +29,13 @@ impl Protocol for SshProtocol {
 
         let connect_result = match timeout(timeout_dur, async {
             let stream = match proxy {
-                Some(p) => p.tcp_connect(&addr, timeout_dur).await
-                    .map_err(|e| format!("Proxy connect: {}", e))?,
-                None => {
-                    let s = TcpStream::connect(&addr).await
-                        .map_err(|e| format!("Connect: {}", e))?;
-                    s.set_nodelay(true).ok();
+                Some(p) => {
+                    let s = p.tcp_connect(&addr, timeout_dur).await
+                        .map_err(|e| format!("Proxy connect: {}", e))?;
+                    tune_tcp(&s);
                     s
                 },
+                None => connect_optimized(&addr, timeout_dur).await?,
             };
 
             let std_stream = stream.into_std()
@@ -58,7 +52,7 @@ impl Protocol for SshProtocol {
                 let mut session = match Session::new() {
                     Ok(s) => s,
                     Err(e) => return Ok(AuthResult::new(
-                        target_c.host.clone(), target_c.port, "ssh",
+                        target_c.host, target_c.port, "ssh",
                         username, password,
                         false, start.elapsed(), Some(format!("Session init: {}", e)),
                     )),
@@ -66,19 +60,19 @@ impl Protocol for SshProtocol {
                 session.set_tcp_stream(std_stream);
                 if let Err(e) = session.handshake() {
                     return Ok(AuthResult::new(
-                        target_c.host.clone(), target_c.port, "ssh",
+                        target_c.host, target_c.port, "ssh",
                         username, password,
                         false, start.elapsed(), Some(format!("SSH handshake: {}", e)),
                     ));
                 }
                 match session.userauth_password(&username, &password) {
                     Ok(()) => Ok(AuthResult::new(
-                        target_c.host.clone(), target_c.port, "ssh",
+                        target_c.host, target_c.port, "ssh",
                         username, password,
                         true, start.elapsed(), None,
                     )),
                     Err(e) => Ok(AuthResult::new(
-                        target_c.host.clone(), target_c.port, "ssh",
+                        target_c.host, target_c.port, "ssh",
                         username, password,
                         false, start.elapsed(), Some(e.to_string()),
                     )),

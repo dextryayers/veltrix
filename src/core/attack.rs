@@ -40,28 +40,11 @@ impl AttackOrchestrator {
     pub async fn new(config: AttackConfig, running: Arc<AtomicBool>) -> Result<Self, AttackError> {
         config.validate()?;
 
-        let targets = Self::load_targets(&config).await?;
-        let credentials = Self::load_credentials(&config).await?;
-        let proxies = Self::load_proxies(&config);
-
         let output = OutputHandler::new(
             config.output_format.clone(),
             config.output_file.as_deref(),
-            config.quiet,
-            config.verbose,
+            config.verbose as u8,
         )?;
-
-        let session = if let Some(resume_path) = &config.resume_file {
-            match SessionState::load(resume_path) {
-                Ok(state) => Some(state),
-                Err(e) => {
-                    log::warn!("Cannot load resume file (starting fresh): {}", e);
-                    None
-                }
-            }
-        } else {
-            None
-        };
 
         if let Some(ref domain) = config.rdp_domain {
             rdp::set_domain(domain);
@@ -76,34 +59,35 @@ impl AttackOrchestrator {
             http::set_form_success(v);
         }
 
-        let rate_limiter = RateLimiter::new(config.rate_limit);
-        let jitter = JitterDelay::new(config.delay, 100);
-
         Ok(AttackOrchestrator {
-            targets,
-            credentials,
-            proxies,
+            targets: Vec::new(),
+            credentials: Vec::new(),
+            proxies: Vec::new(),
             results: Vec::new(),
-            session,
+            session: None,
             output,
-            rate_limiter,
-            jitter,
+            rate_limiter: RateLimiter::new(config.rate_limit),
+            jitter: JitterDelay::new(config.delay, 100),
             config,
             running,
         })
     }
 
-    /// Load targets for distributed coordinator (public access from main.rs)
     pub async fn load_targets_for_distributed(config: &AttackConfig) -> Result<Vec<Target>, AttackError> {
-        Self::load_targets(config).await
+        let dns_semaphore = Arc::new(Semaphore::new(50));
+        Self::resolve_targets(config, dns_semaphore).await
     }
 
-    /// Load credentials for distributed coordinator (public access from main.rs)
     pub async fn load_credentials_for_distributed(config: &AttackConfig) -> Result<Vec<Credential>, AttackError> {
         Self::load_credentials(config).await
     }
 
     async fn load_targets(config: &AttackConfig) -> Result<Vec<Target>, AttackError> {
+        let dns_semaphore = Arc::new(Semaphore::new(50));
+        Self::resolve_targets(config, dns_semaphore).await
+    }
+
+    async fn resolve_targets(config: &AttackConfig, dns_semaphore: Arc<Semaphore>) -> Result<Vec<Target>, AttackError> {
         let mut target_strings: Vec<String> = Vec::new();
 
         if let Some(file_path) = &config.target_file {
@@ -145,7 +129,6 @@ impl AttackOrchestrator {
             log::info!("Removed {} duplicate targets", before - targets.len());
         }
 
-        let dns_semaphore = Arc::new(Semaphore::new(50));
         let resolve_futures: Vec<_> = targets.iter_mut().map(|t| {
             let timeout = config.timeout;
             let permit = Arc::clone(&dns_semaphore);
@@ -158,11 +141,12 @@ impl AttackOrchestrator {
         }).collect();
         join_all(resolve_futures).await;
 
+        targets.retain(|t| t.is_resolved());
         if targets.is_empty() {
-            return Err(AttackError::config("No valid targets after parsing"));
+            return Err(AttackError::config("No valid targets after DNS resolution"));
         }
 
-        log::info!("Loaded {} targets ({} after expansion)", config.targets.len(), targets.len());
+        log::info!("Loaded {} targets ({} after expansion+dns)", config.targets.len(), targets.len());
         Ok(targets)
     }
 
@@ -218,9 +202,8 @@ impl AttackOrchestrator {
         }
 
         credentials = build_credentials(config, &users, &passwords);
-        log::info!("Loaded {} credentials ({} users × {} passwords{}",
+        log::info!("Loaded {} credentials ({} users × {} passwords",
             credentials.len(), users.len(), passwords.len(),
-            if config.single_user_mode { ", single-user mode" } else { "" }
         );
         Ok(credentials)
     }
@@ -254,24 +237,84 @@ impl AttackOrchestrator {
     }
 
     pub async fn run(&mut self) -> AttackSummary {
+        let protocol_name = self.config.protocols.first().map(|s| s.as_str()).unwrap_or("unknown");
         let start_time = Utc::now();
-        let total_combinations = self.targets.len() * self.credentials.len();
 
+        let targets = match Self::load_targets(&self.config).await {
+            Ok(t) => t,
+            Err(e) => {
+                log::error!("Failed to load targets: {}", e);
+                return AttackSummary {
+                    start_time,
+                    end_time: Some(Utc::now()),
+                    total_targets: 0,
+                    total_credentials: 0,
+                    attempts: 0,
+                    successes: 0,
+                    failures: 0,
+                    errors: 0,
+                    results: vec![],
+                    total_duration: Some(std::time::Duration::ZERO),
+                };
+            }
+        };
+        self.targets = targets;
+
+        let credentials = match Self::load_credentials(&self.config).await {
+            Ok(c) => c,
+            Err(e) => {
+                log::error!("Failed to load credentials: {}", e);
+                return AttackSummary {
+                    start_time,
+                    end_time: Some(Utc::now()),
+                    total_targets: self.targets.len(),
+                    total_credentials: 0,
+                    attempts: 0,
+                    successes: 0,
+                    failures: 0,
+                    errors: 0,
+                    results: vec![],
+                    total_duration: Some(std::time::Duration::ZERO),
+                };
+            }
+        };
+        self.credentials = credentials;
+        self.proxies = Self::load_proxies(&self.config);
+
+        if let Some(resume_path) = &self.config.resume_file {
+            match SessionState::load(resume_path) {
+                Ok(state) => self.session = Some(state),
+                Err(e) => log::warn!("Cannot load resume file (starting fresh): {}", e),
+            }
+        }
+
+        let total_combinations = self.targets.len() * self.credentials.len();
         log::info!("Starting attack: {} targets × {} credentials ({} total attempts)",
             self.targets.len(), self.credentials.len(), total_combinations);
 
-        self.output.init_progress(total_combinations as u64);
+        self.output.init_dashboard(
+            protocol_name,
+            self.targets.len(),
+            self.credentials.len(),
+        );
 
         let mut pool = WorkerPool::new(&self.config, Arc::clone(&self.running), self.proxies.clone());
         let mut attempt_count = 0u64;
+        let mut successes_global = 0u64;
+        let mut failures_global = 0u64;
+        let mut errors_global = 0u64;
+        let mut lockout_events = 0u64;
+        let mut rate_limit_events = 0u64;
 
-        'target_loop: for target_idx in 0..self.targets.len() {
+        let target_count = self.targets.len();
+        let cred_count = self.credentials.len();
+
+        'submit_loop: for target_idx in 0..target_count {
             let target = &self.targets[target_idx];
-
-            for cred_idx in 0..self.credentials.len() {
+            for cred_idx in 0..cred_count {
                 if !self.running.load(Ordering::SeqCst) {
                     log::info!("Graceful shutdown requested. Stopping at attempt {}.", attempt_count);
-                    break 'target_loop;
+                    break 'submit_loop;
                 }
 
                 let credential = &self.credentials[cred_idx];
@@ -294,29 +337,63 @@ impl AttackOrchestrator {
                 });
 
                 attempt_count += 1;
+
+                while let Some((result, _stop_early)) = pool.try_recv_result() {
+                    let classified = classify_error(result.error.as_deref(), result.success);
+
+                    match classified.category {
+                        ResponseCategory::AccountLocked => {
+                            lockout_events += 1;
+                        }
+                        ResponseCategory::RateLimited => {
+                            rate_limit_events += 1;
+                        }
+                        _ => {}
+                    }
+
+                    if result.success {
+                        successes_global += 1;
+                    } else if result.error.is_some() {
+                        errors_global += 1;
+                    } else {
+                        failures_global += 1;
+                    }
+
+                    if let Some(ref mut session) = self.session {
+                        let prev_count = session.total_attempts;
+                        session.mark_tested(&result.username, &result.password);
+                        if result.success {
+                            session.add_success(
+                                &result.target_host,
+                                &result.protocol,
+                                &result.username,
+                                &result.password,
+                            );
+                        }
+                        if self.config.resume_file.is_some() {
+                            let interval = self.config.checkpoint_interval as u64;
+                            if session.total_attempts / interval > prev_count / interval {
+                                if let Some(ref resume_path) = self.config.resume_file {
+                                    let _ = session.save(resume_path);
+                                }
+                            }
+                        }
+                    }
+
+                    self.output.on_result(&result);
+                    self.results.push(result);
+                }
             }
         }
 
-        let results = pool.collect().await;
+        pool.wait_complete().await;
 
-        let mut successes_global = 0u64;
-        let mut failures_global = 0u64;
-        let mut errors_global = 0u64;
-        let mut lockout_events = 0u64;
-        let mut rate_limit_events = 0u64;
-
-        for (result, _stop_early) in &results {
+        while let Some((result, _stop_early)) = pool.try_recv_result() {
             let classified = classify_error(result.error.as_deref(), result.success);
 
             match classified.category {
-                ResponseCategory::AccountLocked => {
-                    lockout_events += 1;
-                    log::warn!("Account locked: {} on {}:{}", result.username, result.target_host, result.target_port);
-                }
-                ResponseCategory::RateLimited => {
-                    rate_limit_events += 1;
-                    log::warn!("Rate limited on {}:{}, consider increasing delay", result.target_host, result.target_port);
-                }
+                ResponseCategory::AccountLocked => lockout_events += 1,
+                ResponseCategory::RateLimited => rate_limit_events += 1,
                 _ => {}
             }
 
@@ -329,32 +406,18 @@ impl AttackOrchestrator {
             }
 
             if let Some(ref mut session) = self.session {
-                let prev_count = session.total_attempts;
                 session.mark_tested(&result.username, &result.password);
                 if result.success {
-                    session.add_success(
-                        &result.target_host,
-                        &result.protocol,
-                        &result.username,
-                        &result.password,
-                    );
+                    session.add_success(&result.target_host, &result.protocol, &result.username, &result.password);
                 }
-                if self.config.resume_file.is_some() {
-                    let interval = self.config.checkpoint_interval as u64;
-                    if session.total_attempts / interval > prev_count / interval {
-                        if let Some(ref resume_path) = self.config.resume_file {
-                            let _ = session.save(resume_path);
-                        }
-                    }
+                if let Some(ref resume_path) = self.config.resume_file {
+                    let _ = session.save(resume_path);
                 }
             }
 
-            self.output.write_result(result);
-            self.results.push(result.clone());
-            self.output.inc_progress();
+            self.output.on_result(&result);
+            self.results.push(result);
         }
-
-        self.output.finish_progress();
 
         if let Some(ref session) = self.session {
             if let Some(ref resume_path) = self.config.resume_file {
@@ -385,7 +448,7 @@ impl AttackOrchestrator {
             total_duration: Some(duration),
         };
 
-        self.output.write_summary(&summary);
+        self.output.finish(&summary);
 
         if matches!(self.config.output_format, crate::core::config::OutputFormat::Html) {
             if let Some(ref output_path) = self.config.output_file {
@@ -399,8 +462,6 @@ impl AttackOrchestrator {
                 } else {
                     log::info!("HTML report saved to {}", html_path.display());
                 }
-            } else {
-                log::info!("HTML report:\n{}", crate::utils::report::generate_html_report(&summary));
             }
         }
 
@@ -409,36 +470,35 @@ impl AttackOrchestrator {
 }
 
 fn build_credentials(config: &AttackConfig, users: &[String], passwords: &[String]) -> Vec<Credential> {
-    let mut credentials = Vec::new();
+    let mut credentials = Vec::with_capacity(users.len() * passwords.len());
     let max_len = config.max_password_len.unwrap_or(usize::MAX);
-    let truncate = |s: &str| -> String {
-        if s.len() > max_len {
-            let t: String = s.chars().take(max_len).collect();
-            log::trace!("Truncated password from {} to {} chars", s.len(), max_len);
-            t
-        } else {
-            s.to_string()
-        }
-    };
 
     if config.spray_mode {
         for pass in passwords {
             for user in users {
-                credentials.push(Credential::new(user.clone(), truncate(pass)));
+                credentials.push(Credential::new(user.clone(), truncate_password(pass, max_len)));
             }
         }
     } else if config.single_user_mode {
         if let Some(user) = users.first() {
             for pass in passwords {
-                credentials.push(Credential::new(user.clone(), truncate(pass)));
+                credentials.push(Credential::new(user.clone(), truncate_password(pass, max_len)));
             }
         }
     } else {
         for user in users {
             for pass in passwords {
-                credentials.push(Credential::new(user.clone(), truncate(pass)));
+                credentials.push(Credential::new(user.clone(), truncate_password(pass, max_len)));
             }
         }
     }
     credentials
+}
+
+fn truncate_password(s: &str, max_len: usize) -> String {
+    if s.len() > max_len {
+        s.chars().take(max_len).collect()
+    } else {
+        s.to_string()
+    }
 }

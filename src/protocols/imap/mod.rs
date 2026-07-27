@@ -11,6 +11,7 @@ use crate::core::result::AuthResult;
 use crate::core::target::Target;
 use crate::proxy::ProxyConfig;
 use super::Protocol;
+use super::tcp::{connect_optimized, tune_tcp, alloc_read_buf};
 
 pub struct ImapProtocol;
 
@@ -74,7 +75,7 @@ async fn imap_auth_plain(
     start: Instant,
     stream: TcpStream,
 ) -> Result<AuthResult, String> {
-    let mut buf = vec![0u8; 4096];
+    let mut buf = alloc_read_buf();
 
     stream.readable().await.ok();
     let _n = stream.try_read(&mut buf).ok();
@@ -100,7 +101,7 @@ async fn imap_auth_plain(
             );
             match connector.connect(host, stream).await {
                 Ok(mut tls_stream) => {
-                    let mut tb = vec![0u8; 4096];
+                    let mut tb = alloc_read_buf();
                     tls_stream.read(&mut tb).await.ok();
                     let cmd = format!("a003 LOGIN {} {}\r\n", username, password);
                     tls_stream.write_all(cmd.as_bytes()).await.map_err(|e| format!("LOGIN cmd: {}", e))?;
@@ -180,13 +181,15 @@ impl Protocol for ImapProtocol {
 
         match timeout(timeout_dur, async {
             let stream = match proxy {
-                Some(p) => p.tcp_connect(&addr, timeout_dur).await
-                    .map_err(|e| format!("Connect: {}", e))?,
-                None => {
-                    let s = TcpStream::connect(&addr).await
+                Some(p) => {
+                    let s = p.tcp_connect(&addr, timeout_dur).await
                         .map_err(|e| format!("Connect: {}", e))?;
-                    s.set_nodelay(true).ok();
+                    tune_tcp(&s);
                     s
+                },
+                None => {
+                    connect_optimized(&addr, timeout_dur).await
+                        .map_err(|e| format!("Connect: {}", e))?
                 },
             };
 

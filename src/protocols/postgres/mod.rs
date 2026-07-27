@@ -11,6 +11,7 @@ use crate::core::result::AuthResult;
 use crate::core::target::Target;
 use crate::proxy::ProxyConfig;
 use super::Protocol;
+use super::tcp::{connect_optimized, tune_tcp, alloc_read_buf};
 
 pub struct PostgresProtocol;
 
@@ -68,10 +69,7 @@ async fn pg_auth_tls(
     credential: &Credential,
     start: Instant,
 ) -> Result<AuthResult, String> {
-    let username = credential.username.clone();
-    let password = credential.password.clone();
-
-    let params = format!("\0user\0{}\0database\0{}\0\0", username, username);
+    let params = format!("\0user\0{}\0database\0{}\0\0", &credential.username, &credential.username);
     let payload_len = 4 + 4 + params.len() as u32;
     let mut startup = Vec::new();
     startup.extend_from_slice(&payload_len.to_be_bytes());
@@ -81,7 +79,7 @@ async fn pg_auth_tls(
         .map_err(|e| format!("Startup: {}", e))?;
     tls_stream.flush().await.ok();
 
-    let mut buf = vec![0u8; 8192];
+    let mut buf = alloc_read_buf();
     let n = tls_stream.read(&mut buf).await
         .map_err(|e| format!("Read auth: {}", e))?;
     if n < 5 {
@@ -94,11 +92,11 @@ async fn pg_auth_tls(
         let auth_type = u32::from_be_bytes([buf[5], buf[6], buf[7], buf[8]]);
         match auth_type {
             0 => Ok(AuthResult::new(host.to_string(), port, "postgres",
-                username, password, true, start.elapsed(), None)),
+                credential.username.clone(), credential.password.clone(), true, start.elapsed(), None)),
             3 => {
                 let mut pw_buf = Vec::new();
                 pw_buf.extend_from_slice(&(0u32.to_be_bytes()));
-                pw_buf.extend_from_slice(password.as_bytes());
+                pw_buf.extend_from_slice(credential.password.as_bytes());
                 pw_buf.push(0);
                 let len = pw_buf.len() as u32 + 4;
                 let mut pkt = vec!['p' as u8];
@@ -106,11 +104,11 @@ async fn pg_auth_tls(
                 pkt.extend_from_slice(&pw_buf);
                 tls_stream.write_all(&pkt).await.map_err(|e| format!("Password: {}", e))?;
                 tls_stream.flush().await.ok();
-                pg_read_auth_response(tls_stream, host, port, &username, &password, start).await
+                pg_read_auth_response(tls_stream, host, port, &credential.username, &credential.password, start).await
             }
             5 => {
                 let salt = &buf[9..13];
-                let hash = pg_md5(&password, &username, salt);
+                let hash = pg_md5(&credential.password, &credential.username, salt);
                 let mut pw_bytes = hash.as_bytes().to_vec();
                 pw_bytes.push(0);
                 let len = pw_bytes.len() as u32 + 4;
@@ -119,14 +117,14 @@ async fn pg_auth_tls(
                 pkt.extend_from_slice(&pw_bytes);
                 tls_stream.write_all(&pkt).await.map_err(|e| format!("MD5 password: {}", e))?;
                 tls_stream.flush().await.ok();
-                pg_read_auth_response(tls_stream, host, port, &username, &password, start).await
+                pg_read_auth_response(tls_stream, host, port, &credential.username, &credential.password, start).await
             }
             _ => Err(format!("Unsupported auth type: {}", auth_type)),
         }
     } else if msg_type == 'E' {
         let err_msg = String::from_utf8_lossy(&buf[..n.min(buf.len())]);
         Ok(AuthResult::new(host.to_string(), port, "postgres",
-            username, password, false, start.elapsed(), Some(format!("Error: {}", err_msg.trim()))))
+            credential.username.clone(), credential.password.clone(), false, start.elapsed(), Some(format!("Error: {}", err_msg.trim()))))
     } else {
         Err(format!("Unexpected msg type: {}", msg_type))
     }
@@ -139,10 +137,7 @@ async fn pg_auth_plain(
     credential: &Credential,
     start: Instant,
 ) -> Result<AuthResult, String> {
-    let username = credential.username.clone();
-    let password = credential.password.clone();
-
-    let params = format!("\0user\0{}\0database\0{}\0\0", username, username);
+    let params = format!("\0user\0{}\0database\0{}\0\0", &credential.username, &credential.username);
     let payload_len = 4 + 4 + params.len() as u32;
     let mut startup = Vec::new();
     startup.extend_from_slice(&payload_len.to_be_bytes());
@@ -152,7 +147,7 @@ async fn pg_auth_plain(
         .map_err(|e| format!("Startup: {}", e))?;
     stream.flush().await.ok();
 
-    let mut buf = vec![0u8; 8192];
+    let mut buf = alloc_read_buf();
     let n = stream.read(&mut buf).await
         .map_err(|e| format!("Read auth: {}", e))?;
     if n < 5 {
@@ -165,11 +160,11 @@ async fn pg_auth_plain(
         let auth_type = u32::from_be_bytes([buf[5], buf[6], buf[7], buf[8]]);
         match auth_type {
             0 => Ok(AuthResult::new(host.to_string(), port, "postgres",
-                username, password, true, start.elapsed(), None)),
+                credential.username.clone(), credential.password.clone(), true, start.elapsed(), None)),
             3 => {
                 let mut pw_buf = Vec::new();
                 pw_buf.extend_from_slice(&(0u32.to_be_bytes()));
-                pw_buf.extend_from_slice(password.as_bytes());
+                pw_buf.extend_from_slice(credential.password.as_bytes());
                 pw_buf.push(0);
                 let len = pw_buf.len() as u32 + 4;
                 let mut pkt = vec!['p' as u8];
@@ -177,11 +172,11 @@ async fn pg_auth_plain(
                 pkt.extend_from_slice(&pw_buf);
                 stream.write_all(&pkt).await.map_err(|e| format!("Password: {}", e))?;
                 stream.flush().await.ok();
-                pg_read_auth_response_plain(stream, host, port, &username, &password, start).await
+                pg_read_auth_response_plain(stream, host, port, &credential.username, &credential.password, start).await
             }
             5 => {
                 let salt = &buf[9..13];
-                let hash = pg_md5(&password, &username, salt);
+                let hash = pg_md5(&credential.password, &credential.username, salt);
                 let mut pw_bytes = hash.as_bytes().to_vec();
                 pw_bytes.push(0);
                 let len = pw_bytes.len() as u32 + 4;
@@ -190,14 +185,14 @@ async fn pg_auth_plain(
                 pkt.extend_from_slice(&pw_bytes);
                 stream.write_all(&pkt).await.map_err(|e| format!("MD5 password: {}", e))?;
                 stream.flush().await.ok();
-                pg_read_auth_response_plain(stream, host, port, &username, &password, start).await
+                pg_read_auth_response_plain(stream, host, port, &credential.username, &credential.password, start).await
             }
             _ => Err(format!("Unsupported auth type: {}", auth_type)),
         }
     } else if msg_type == 'E' {
         let err_msg = String::from_utf8_lossy(&buf[..n.min(buf.len())]);
         Ok(AuthResult::new(host.to_string(), port, "postgres",
-            username, password, false, start.elapsed(), Some(format!("Error: {}", err_msg.trim()))))
+            credential.username.clone(), credential.password.clone(), false, start.elapsed(), Some(format!("Error: {}", err_msg.trim()))))
     } else {
         Err(format!("Unexpected msg type: {}", msg_type))
     }
@@ -207,7 +202,7 @@ async fn pg_read_auth_response(
     tls_stream: &mut tokio_native_tls::TlsStream<TcpStream>,
     host: &str, port: u16, username: &str, password: &str, start: Instant,
 ) -> Result<AuthResult, String> {
-    let mut buf = vec![0u8; 8192];
+    let mut buf = alloc_read_buf();
     let n = tls_stream.read(&mut buf).await.map_err(|e| format!("Read response: {}", e))?;
     if n < 5 { return Err("Short response".into()); }
     let resp_type = buf[0] as char;
@@ -234,7 +229,7 @@ async fn pg_read_auth_response_plain(
     stream: &mut TcpStream,
     host: &str, port: u16, username: &str, password: &str, start: Instant,
 ) -> Result<AuthResult, String> {
-    let mut buf = vec![0u8; 8192];
+    let mut buf = alloc_read_buf();
     let n = stream.read(&mut buf).await.map_err(|e| format!("Read response: {}", e))?;
     if n < 5 { return Err("Short response".into()); }
     let resp_type = buf[0] as char;
@@ -273,14 +268,13 @@ impl Protocol for PostgresProtocol {
         match timeout(timeout_dur, async {
             let addr = target.addr_string();
             let stream = match proxy {
-                Some(p) => p.tcp_connect(&addr, timeout_dur).await
-                    .map_err(|e| format!("Proxy connect: {}", e))?,
-                None => {
-                    let s = TcpStream::connect(&addr).await
-                        .map_err(|e| format!("Connect: {}", e))?;
-                    s.set_nodelay(true).ok();
+                Some(p) => {
+                    let s = p.tcp_connect(&addr, timeout_dur).await
+                        .map_err(|e| format!("Proxy connect: {}", e))?;
+                    tune_tcp(&s);
                     s
                 },
+                None => connect_optimized(&addr, timeout_dur).await?,
             };
             pg_authenticate_inner(stream, &target.host, target.port, credential, start).await
         }).await {

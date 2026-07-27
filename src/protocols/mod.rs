@@ -13,6 +13,7 @@ pub mod smb;
 pub mod smtp;
 pub mod snmp;
 pub mod ssh;
+pub mod tcp;
 pub mod telnet;
 pub mod vnc;
 

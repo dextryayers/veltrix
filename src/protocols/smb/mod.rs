@@ -9,6 +9,7 @@ use crate::core::credential::Credential;
 use crate::core::result::AuthResult;
 use crate::core::target::Target;
 use crate::proxy::ProxyConfig;
+use super::tcp::{connect_optimized, tune_tcp};
 use super::Protocol;
 
 pub struct SmbProtocol;
@@ -353,14 +354,14 @@ impl Protocol for SmbProtocol {
         match timeout(timeout_dur, async {
             let addr = target.addr_string();
             let mut stream = match proxy {
-                Some(p) => p.tcp_connect(&addr, timeout_dur).await
-                    .map_err(|e| format!("Proxy connect: {}", e))?,
-                None => {
-                    let s = TcpStream::connect(&addr).await
-                        .map_err(|e| format!("Connect: {}", e))?;
-                    s.set_nodelay(true).ok();
+                Some(p) => {
+                    let s = p.tcp_connect(&addr, timeout_dur).await
+                        .map_err(|e| format!("Proxy connect: {}", e))?;
+                    tune_tcp(&s);
                     s
                 },
+                None => connect_optimized(&addr, timeout_dur).await
+                    .map_err(|e| format!("Connect: {}", e))?,
             };
 
             let nego_req = build_negotiate_request();

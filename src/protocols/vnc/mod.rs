@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tokio::time::timeout;
+use super::tcp::{connect_optimized, tune_tcp};
 
 use crate::core::credential::Credential;
 use crate::core::result::AuthResult;
@@ -58,13 +58,14 @@ impl Protocol for VncProtocol {
 
         match timeout(timeout_dur, async {
             let mut stream = match proxy {
-                Some(p) => p.tcp_connect(&target.addr_string(), timeout_dur).await
-                    .map_err(|e| format!("Connect: {}", e))?,
-                None => {
-                    let s = TcpStream::connect(target.addr_string()).await
+                Some(p) => {
+                    let s = p.tcp_connect(&target.addr_string(), timeout_dur).await
                         .map_err(|e| format!("Connect: {}", e))?;
-                    s.set_nodelay(true).ok();
+                    tune_tcp(&s);
                     s
+                },
+                None => {
+                    connect_optimized(&target.addr_string(), timeout_dur).await?
                 },
             };
 

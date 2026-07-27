@@ -16,7 +16,7 @@ use cli::{print_banner, print_protocols, Cli, Commands, ProtocolArgs, CreateArgs
 use core::attack::AttackOrchestrator;
 use crate::utils::wordlist_gen::{WordlistConfig, generate_wordlist};
 use colored::Colorize;
-use chrono::Local;
+
 
 #[tokio::main]
 async fn main() {

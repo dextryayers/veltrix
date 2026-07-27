@@ -13,6 +13,7 @@ use crate::core::result::AuthResult;
 use crate::core::target::Target;
 use crate::proxy::ProxyConfig;
 use super::Protocol;
+use super::tcp::{connect_optimized, tune_tcp, alloc_read_buf};
 
 pub struct LdapProtocol;
 
@@ -117,13 +118,15 @@ impl Protocol for LdapProtocol {
         match timeout(timeout_dur, async {
             let addr = target.addr_string();
             let stream = match proxy {
-                Some(p) => p.tcp_connect(&addr, timeout_dur).await
-                    .map_err(|e| format!("Proxy connect: {}", e))?,
-                None => {
-                    let s = TcpStream::connect(&addr).await
-                        .map_err(|e| format!("Connect: {}", e))?;
-                    s.set_nodelay(true).ok();
+                Some(p) => {
+                    let s = p.tcp_connect(&addr, timeout_dur).await
+                        .map_err(|e| format!("Proxy connect: {}", e))?;
+                    tune_tcp(&s);
                     s
+                },
+                None => {
+                    connect_optimized(&addr, timeout_dur).await
+                        .map_err(|e| format!("Connect: {}", e))?
                 },
             };
 
@@ -135,14 +138,13 @@ impl Protocol for LdapProtocol {
                 let mut tls_stream = connector.connect(&target.host, stream).await
                     .map_err(|e| format!("TLS connect: {}", e))?;
 
-                let dn = credential.username.clone();
-                let bind_req = build_bind_request(&dn, &credential.password);
+                let bind_req = build_bind_request(&credential.username, &credential.password);
 
                 tls_stream.write_all(&bind_req).await
                     .map_err(|e| format!("Send bind: {}", e))?;
                 tls_stream.flush().await.ok();
 
-                let mut buf = vec![0u8; 8192];
+                let mut buf = alloc_read_buf();
                 let n = tls_stream.read(&mut buf).await
                     .map_err(|e| format!("Read resp: {}", e))?;
                 let result_code = parse_ldap_result_code(&buf[..n]);
@@ -151,8 +153,7 @@ impl Protocol for LdapProtocol {
             }
 
             let mut stream = stream;
-            let dn = credential.username.clone();
-            let bind_req = build_bind_request(&dn, &credential.password);
+            let bind_req = build_bind_request(&credential.username, &credential.password);
 
             stream.write_all(&bind_req).await
                 .map_err(|e| format!("Send bind: {}", e))?;

@@ -9,6 +9,7 @@ use crate::core::result::AuthResult;
 use crate::core::target::Target;
 use crate::proxy::ProxyConfig;
 use super::Protocol;
+use super::tcp::{connect_optimized, tune_tcp};
 
 pub struct MssqlProtocol;
 
@@ -143,13 +144,15 @@ impl Protocol for MssqlProtocol {
 
         match timeout(timeout_dur, async {
             let mut stream = match proxy {
-                Some(p) => p.tcp_connect(&target.addr_string(), timeout_dur).await
-                    .map_err(|e| format!("Connect: {}", e))?,
-                None => {
-                    let s = TcpStream::connect(target.addr_string()).await
+                Some(p) => {
+                    let s = p.tcp_connect(&target.addr_string(), timeout_dur).await
                         .map_err(|e| format!("Connect: {}", e))?;
-                    s.set_nodelay(true).ok();
+                    tune_tcp(&s);
                     s
+                },
+                None => {
+                    connect_optimized(&target.addr_string(), timeout_dur).await
+                        .map_err(|e| format!("Connect: {}", e))?
                 },
             };
 
