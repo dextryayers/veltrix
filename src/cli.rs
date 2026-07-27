@@ -91,6 +91,84 @@ pub enum Commands {
     #[command(about = "SNMP protocol brute force attack with community string enumeration")]
     Snmp(ProtocolArgs),
 
+    // ── Database ──
+    #[command(about = "Oracle database brute force attack")]
+    Oracle(ProtocolArgs),
+    #[command(about = "Cassandra database brute force attack")]
+    Cassandra(ProtocolArgs),
+    #[command(about = "CouchDB NoSQL database brute force attack")]
+    Couchdb(ProtocolArgs),
+    #[command(about = "Elasticsearch database brute force attack")]
+    Elasticsearch(ProtocolArgs),
+    #[command(about = "Firebird database brute force attack")]
+    Firebird(ProtocolArgs),
+
+    // ── Message Queue ──
+    #[command(about = "RabbitMQ message broker brute force attack")]
+    Rabbitmq(ProtocolArgs),
+    #[command(about = "ActiveMQ message broker brute force attack")]
+    Activemq(ProtocolArgs),
+    #[command(about = "Apache Kafka message broker brute force attack")]
+    Kafka(ProtocolArgs),
+
+    // ── VoIP / Media ──
+    #[command(about = "SIP VoIP protocol brute force attack")]
+    Sip(ProtocolArgs),
+    #[command(about = "RTSP media streaming brute force attack")]
+    Rtsp(ProtocolArgs),
+
+    // ── Web Apps ──
+    #[command(about = "Apache Tomcat brute force attack")]
+    Tomcat(ProtocolArgs),
+    #[command(about = "Jenkins CI brute force attack")]
+    Jenkins(ProtocolArgs),
+    #[command(about = "GitLab brute force attack")]
+    Gitlab(ProtocolArgs),
+    #[command(about = "SonarQube brute force attack")]
+    Sonarqube(ProtocolArgs),
+    #[command(about = "Docker registry brute force attack")]
+    Docker(ProtocolArgs),
+    #[command(about = "Kubernetes API server brute force attack")]
+    Kubernetes(ProtocolArgs),
+    #[command(about = "HashiCorp Vault brute force attack")]
+    Vault(ProtocolArgs),
+    #[command(about = "HashiCorp Consul brute force attack")]
+    Consul(ProtocolArgs),
+
+    // ── Remote Management ──
+    #[command(about = "VMware vSphere brute force attack")]
+    Vmware(ProtocolArgs),
+    #[command(about = "HP iLO remote management brute force attack")]
+    Ilo(ProtocolArgs),
+    #[command(about = "IPMI remote management brute force attack")]
+    Ipmi(ProtocolArgs),
+
+    // ── Chat / News ──
+    #[command(about = "XMPP instant messaging brute force attack")]
+    Xmpp(ProtocolArgs),
+    #[command(about = "IRC chat protocol brute force attack")]
+    Irc(ProtocolArgs),
+    #[command(about = "NNTP newsgroup brute force attack")]
+    Nntp(ProtocolArgs),
+
+    // ── Version Control ──
+    #[command(about = "CVS version control brute force attack")]
+    Cvs(ProtocolArgs),
+    #[command(about = "SVN Subversion brute force attack")]
+    Svn(ProtocolArgs),
+
+    // ── Legacy ──
+    #[command(about = "Rexec remote execution brute force attack")]
+    Rexec(ProtocolArgs),
+    #[command(about = "Rlogin remote login brute force attack")]
+    Rlogin(ProtocolArgs),
+
+    // ── Other ──
+    #[command(about = "Squid proxy brute force attack")]
+    Squid(ProtocolArgs),
+    #[command(about = "Memcached brute force attack")]
+    Memcached(ProtocolArgs),
+
     #[command(about = "Generate a wordlist from target/personal information")]
     Create(CreateArgs),
 }
@@ -131,57 +209,52 @@ pub struct CreateArgs {
 #[derive(Parser, Debug)]
 #[command(
     name = "veltrix",
-    version = "1.1.0",
+    version = "1.2.0",
     about = "\
-VELTRIX v1.1 - Multi-Protocol Brute Force & Security Auditing Toolkit - By AniipID
+VELTRIX v1.2 - Multi-Protocol Brute Force Toolkit - By AniipID
 
-\u{26a0}  WARNING: For authorized security testing ONLY.
-\u{26a0}  Unauthorized use is ILLEGAL.
+\u{26a0}  Authorized testing only. Unauthorized use is ILLEGAL.
 
-Supports 18+ protocols (ssh, ftp, telnet, smtp, pop3, imap, rdp,
-mysql, postgres, ldap, redis, http, vnc, mongodb, mssql, smb, snmp)
-plus port scanning, wordlist gen, ML prediction, distributed mode.",
+47 protocols: ssh, ftp, telnet, smtp, pop3, imap, rdp, mysql, postgres,
+ldap, redis, http, vnc, mongodb, mssql, smb, snmp, oracle, cassandra,
+couchdb, elasticsearch, firebird, rabbitmq, activemq, kafka, sip, rtsp,
+tomcat, jenkins, gitlab, sonarqube, docker, kubernetes, vault, consul,
+vmware, ilo, ipmi, xmpp, irc, nntp, cvs, svn, rexec, rlogin, squid,
+memcached + scan-ports, wordlist-gen, ML, distributed mode.",
     long_about = concat!(
-        "VELTRIX v1.1 - Multi-Protocol Brute Force & Security Auditing Toolkit - By AniipID\n",
-        "===================================================\n\n",
-        "A high-performance, multi-protocol brute force & security auditing tool\n",
-        "written in Rust. Supports 18+ protocols with advanced features.\n\n",
-        "\u{26a0}  WARNING: This tool is for authorized security testing ONLY.\n",
-        "\u{26a0}  Unauthorized use against systems you do not own or lack\n",
-        "\u{26a0}  explicit written permission to test is ILLEGAL.\n",
-        "\u{26a0}  Users are solely responsible for complying with all\n",
-        "\u{26a0}  applicable local, state, and federal laws.\n\n",
-        "Features:\n",
-        "  - 18 attack protocols: ssh, ftp, telnet, smtp, pop3, imap, rdp,\n",
-        "    mysql, postgres, ldap, redis, http, vnc, mongodb, mssql, smb, snmp\n",
-        "  - Fast TCP port scanner with banner grabbing & service fingerprinting\n",
-        "  - Wordlist generation from target information\n",
-        "  - Markov-chain based password generation & scoring (ML mode)\n",
-        "  - Distributed brute force across multiple nodes\n",
-        "  - Proxy support: HTTP, SOCKS4, SOCKS5, with rotation & chaining\n",
-        "  - Plugin system for custom protocol modules\n",
-        "  - AES-256-GCM output encryption\n",
-        "  - CIDR & range target expansion\n\n",
+        "VELTRIX v1.2 - Multi-Protocol Brute Force Toolkit - By AniipID\n",
+        "=========================================================\n\n",
+        "High-performance brute force & security auditing tool (47 protocols).\n\n",
+        "  - 47 attack protocols (ssh, ftp, telnet, smtp, pop3, imap, rdp,\n",
+        "    mysql, postgres, ldap, redis, http, vnc, mongodb, mssql, smb,\n",
+        "    snmp, oracle, cassandra, couchdb, elasticsearch, firebird,\n",
+        "    rabbitmq, activemq, kafka, sip, rtsp, tomcat, jenkins, gitlab,\n",
+        "    sonarqube, docker, kubernetes, vault, consul, vmware, ilo, ipmi,\n",
+        "    xmpp, irc, nntp, cvs, svn, rexec, rlogin, squid, memcached)\n",
+        "  - TCP port scanner with banner grabbing\n",
+        "  - Wordlist generation & ML password prediction\n",
+        "  - Distributed mode across multiple nodes\n",
+        "  - Proxy rotation & chaining (HTTP, SOCKS4/5)\n",
+        "  - Plugin system, AES-256-GCM encryption, CIDR\n\n",
         "Examples:\n",
         "  veltrix ssh -t 192.168.1.1 -u admin -W passwords.txt\n",
-        "  veltrix ftp -t 10.0.0.1 -U users.txt -W passes.txt -x 20\n",
-        "  veltrix scan-ports -t 10.0.0.1 --ports 22,80,443\n",
-        "  veltrix rdp -t 10.0.0.5 -C combos.txt -o results.json -f json\n",
-        "  veltrix smtp -t mail.example.com -U users.txt -W pass.txt\n",
-        "  veltrix http -t https://example.com/login -u admin -W pass.txt\n\n",
+        "  veltrix oracle -t 10.0.0.1:1521 -U users.txt -W pass.txt\n",
+        "  veltrix kafka -t kafka.example.com:9092 -u admin -W pass.txt\n",
+        "  veltrix kubernetes -t 10.0.0.1:6443 -U users.txt -W pass.txt\n",
+        "  veltrix scan-ports -t 10.0.0.1 --ports 22,80,443\n\n",
         "CIDR & Range:\n",
         "  veltrix ssh -t 192.168.1.0/24 -U users.txt -W passes.txt\n",
         "  veltrix ssh -t 10.0.0.1-10.0.0.10 -C combos.txt\n\n",
-        "\u{26a0}  WARNING: Only use on systems you own or have written permission to test."
+        "\u{26a0}  Authorized testing only. Unauthorized use is ILLEGAL."
     ),
     verbatim_doc_comment,
-    subcommand_required = true,
+    subcommand_required = false,
     arg_required_else_help = true,
     override_usage = "veltrix <COMMAND> [OPTIONS]",
 )]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 
     // ── Target ──
     #[arg(short = 't', long = "target", help = "Target host:port or IP address (support domain/IP local/public)", value_name = "HOST[:PORT]", global = true)]
@@ -426,37 +499,67 @@ pub fn port_to_protocol(port: u16) -> Option<&'static str> {
 pub fn print_banner() {
     let banner = r#"
 ╔══════════════════════════════════════════════════════╗
-║                  VELTRIX v1.1                        ║
-║         Multi-Protocol Brute Force Toolkit           ║
-║           An advanced security auditing tool         ║
+║                  VELTRIX v1.2                        ║
+║           Multi-Protocol Brute Force Toolkit         ║
+║            47 protocols · optimized · fast           ║
 ║                   By AniipID                         ║
 ╚══════════════════════════════════════════════════════╝
     "#;
     println!("{}", banner.yellow());
-    println!("{}", "\u{26a0}  WARNING: Only use on systems you own or have permission to test.".red().bold());
+    println!("{}", "\u{26a0}  WARNING: Authorized testing only. Unauthorized use is ILLEGAL.".red().bold());
     println!();
 }
 
 pub fn print_protocols() {
     println!("{}", "Supported Protocols:".green().bold());
-    println!("  {:<12} {:<12} {}", "Protocol", "Default Port(s)", "Auth Methods");
-    println!("  {:<12} {:<12} {}", "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}", "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}", "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}");
-    println!("  {:<12} {:<12} {}", "ssh", "22", "password, key");
-    println!("  {:<12} {:<12} {}", "ftp", "21", "plain, TLS/SSL");
-    println!("  {:<12} {:<12} {}", "telnet", "23", "plaintext");
-    println!("  {:<12} {:<12} {}", "smtp", "25/465/587", "LOGIN, PLAIN, CRAM-MD5, STARTTLS");
-    println!("  {:<12} {:<12} {}", "pop3", "110/995", "USER/PASS, APOP, STLS");
-    println!("  {:<12} {:<12} {}", "imap", "143/993", "LOGIN, PLAIN, CRAM-MD5, STARTTLS");
-    println!("  {:<12} {:<12} {}", "rdp", "3389", "NLA, RDP Standard");
-    println!("  {:<12} {:<12} {}", "mysql", "3306", "mysql_native_password");
-    println!("  {:<12} {:<12} {}", "postgres", "5432", "md5, cleartext, SSL");
-    println!("  {:<12} {:<12} {}", "ldap", "389/636", "simple bind, LDAPS");
-    println!("  {:<12} {:<12} {}", "redis", "6379/6380", "AUTH, TLS");
-    println!("  {:<12} {:<12} {}", "http", "80/443", "Basic, Digest, Form");
-    println!("  {:<12} {:<12} {}", "vnc", "5900", "VNC Auth");
-    println!("  {:<12} {:<12} {}", "mongodb", "27017", "SCRAM, MONGODB-CR");
-    println!("  {:<12} {:<12} {}", "mssql", "1433", "SQL Server Auth");
-    println!("  {:<12} {:<12} {}", "smb", "445", "NTLMv1/v2");
-    println!("  {:<12} {:<12} {}", "snmp", "161", "community strings (v1/v2c)");
+    println!("  {:<14} {:<14} {:<30}", "Protocol", "Default Port(s)", "Auth Methods");
+    println!("  {:<14} {:<14} {:<30}", "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}", "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}", "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}");
+    println!("  {:<14} {:<14} {:<30}", "ssh", "22", "password, key");
+    println!("  {:<14} {:<14} {:<30}", "ftp", "21", "plain, TLS/SSL");
+    println!("  {:<14} {:<14} {:<30}", "telnet", "23", "plaintext");
+    println!("  {:<14} {:<14} {:<30}", "smtp", "25/465/587", "LOGIN, PLAIN, CRAM-MD5, STARTTLS");
+    println!("  {:<14} {:<14} {:<30}", "pop3", "110/995", "USER/PASS, APOP, STLS");
+    println!("  {:<14} {:<14} {:<30}", "imap", "143/993", "LOGIN, PLAIN, CRAM-MD5, STARTTLS");
+    println!("  {:<14} {:<14} {:<30}", "rdp", "3389", "NLA, RDP Standard");
+    println!("  {:<14} {:<14} {:<30}", "mysql", "3306", "mysql_native_password");
+    println!("  {:<14} {:<14} {:<30}", "postgres", "5432", "md5, cleartext, SSL");
+    println!("  {:<14} {:<14} {:<30}", "ldap", "389/636", "simple bind, LDAPS");
+    println!("  {:<14} {:<14} {:<30}", "redis", "6379/6380", "AUTH, TLS");
+    println!("  {:<14} {:<14} {:<30}", "http", "80/443", "Basic, Digest, Form");
+    println!("  {:<14} {:<14} {:<30}", "vnc", "5900", "VNC Auth");
+    println!("  {:<14} {:<14} {:<30}", "mongodb", "27017", "SCRAM, MONGODB-CR");
+    println!("  {:<14} {:<14} {:<30}", "mssql", "1433", "SQL Server Auth");
+    println!("  {:<14} {:<14} {:<30}", "smb", "445", "NTLMv1/v2");
+    println!("  {:<14} {:<14} {:<30}", "snmp", "161", "community strings (v1/v2c)");
+    println!("  {:<14} {:<14} {:<30}", "oracle", "1521", "password");
+    println!("  {:<14} {:<14} {:<30}", "cassandra", "9042", "password");
+    println!("  {:<14} {:<14} {:<30}", "couchdb", "5984", "basic, cookie");
+    println!("  {:<14} {:<14} {:<30}", "elasticsearch", "9200", "basic, API key");
+    println!("  {:<14} {:<14} {:<30}", "firebird", "3050", "password");
+    println!("  {:<14} {:<14} {:<30}", "rabbitmq", "5672", "PLAIN, AMQPLAIN");
+    println!("  {:<14} {:<14} {:<30}", "activemq", "61616", "password");
+    println!("  {:<14} {:<14} {:<30}", "kafka", "9092", "SASL/PLAIN");
+    println!("  {:<14} {:<14} {:<30}", "sip", "5060", "digest");
+    println!("  {:<14} {:<14} {:<30}", "rtsp", "554", "basic, digest");
+    println!("  {:<14} {:<14} {:<30}", "tomcat", "8080", "manager-gui");
+    println!("  {:<14} {:<14} {:<30}", "jenkins", "8080", "basic, form");
+    println!("  {:<14} {:<14} {:<30}", "gitlab", "80/443", "token, basic");
+    println!("  {:<14} {:<14} {:<30}", "sonarqube", "9000", "token, basic");
+    println!("  {:<14} {:<14} {:<30}", "docker", "2375/2376", "basic");
+    println!("  {:<14} {:<14} {:<30}", "kubernetes", "6443", "token, basic");
+    println!("  {:<14} {:<14} {:<30}", "vault", "8200", "token, LDAP");
+    println!("  {:<14} {:<14} {:<30}", "consul", "8500", "token, basic");
+    println!("  {:<14} {:<14} {:<30}", "vmware", "443", "password");
+    println!("  {:<14} {:<14} {:<30}", "ilo", "443", "password");
+    println!("  {:<14} {:<14} {:<30}", "ipmi", "623", "RMCP+");
+    println!("  {:<14} {:<14} {:<30}", "xmpp", "5222", "PLAIN, SCRAM");
+    println!("  {:<14} {:<14} {:<30}", "irc", "6667", "PASS");
+    println!("  {:<14} {:<14} {:<30}", "nntp", "119", "AUTHINFO");
+    println!("  {:<14} {:<14} {:<30}", "cvs", "2401", "password");
+    println!("  {:<14} {:<14} {:<30}", "svn", "3690", "password");
+    println!("  {:<14} {:<14} {:<30}", "rexec", "512", "password");
+    println!("  {:<14} {:<14} {:<30}", "rlogin", "513", "password");
+    println!("  {:<14} {:<14} {:<30}", "squid", "3128", "basic, NTLM");
+    println!("  {:<14} {:<14} {:<30}", "memcached", "11211", "SASL");
     println!();
 }
