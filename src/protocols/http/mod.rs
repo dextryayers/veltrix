@@ -100,7 +100,7 @@ impl HttpProtocol {
                     target.host.clone(), target.port, "http-basic",
                     credential.username.clone(), credential.password.clone(),
                     success, start.elapsed(),
-                    if success { None } else { Some(format!("HTTP {}", status)) },
+                    if success { None } else { Some(format!("HTTP {} {}", status, if status >= 500 { "(server error)" } else { "" })) },
                 )
             }
             Err(e) => AuthResult::new(
@@ -316,7 +316,6 @@ impl HttpProtocol {
                     text.contains("login failed")
                         || text.contains("invalid")
                         || text.contains("incorrect")
-                        || text.contains("error")
                 } else {
                     !text.contains(&success_str.to_lowercase())
                 };

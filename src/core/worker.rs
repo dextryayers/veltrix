@@ -21,7 +21,6 @@ pub struct WorkerPool {
     running: Arc<AtomicBool>,
     retries: u32,
     timeout: Duration,
-    stop_on_first: bool,
     proxies: Arc<Vec<ProxyConfig>>,
     proxy_failures: Arc<Vec<AtomicU64>>,
     tasks: JoinSet<()>,
@@ -38,7 +37,6 @@ impl WorkerPool {
             running,
             retries: config.retries,
             timeout: config.timeout,
-            stop_on_first: config.stop_on_first,
             proxies: Arc::new(proxies),
             proxy_failures,
             tasks: JoinSet::new(),
@@ -51,11 +49,11 @@ impl WorkerPool {
         self.submit_inner(task, None);
     }
 
-    pub fn submit_with_sender(&mut self, task: WorkerTask, result_tx: mpsc::UnboundedSender<(AuthResult, bool)>) {
+    pub fn submit_with_sender(&mut self, task: WorkerTask, result_tx: mpsc::UnboundedSender<AuthResult>) {
         self.submit_inner(task, Some(result_tx));
     }
 
-    fn submit_inner(&mut self, task: WorkerTask, external_tx: Option<mpsc::UnboundedSender<(AuthResult, bool)>>) {
+    fn submit_inner(&mut self, task: WorkerTask, external_tx: Option<mpsc::UnboundedSender<AuthResult>>) {
         if !self.running.load(Ordering::Relaxed) {
             return;
         }
@@ -66,7 +64,6 @@ impl WorkerPool {
         let running = Arc::clone(&self.running);
         let retries = self.retries;
         let timeout = self.timeout;
-        let stop_early = self.stop_on_first;
         let proxies = Arc::clone(&self.proxies);
         let proxy_fails = Arc::clone(&self.proxy_failures);
         let skipped = Arc::clone(&self.skipped_users);
@@ -75,36 +72,36 @@ impl WorkerPool {
 
         self.tasks.spawn(async move {
             if skipped.contains(&credential.username) {
-                let _ = send_result(&external_tx, (
+                let _ = send_result(&external_tx,
                     AuthResult::new(
                         target.host.clone(), target.port, &target.protocol,
                         credential.username.clone(), credential.password.clone(),
                         false, Duration::ZERO,
                         Some("Skipped (account locked)".into()),
                     ),
-                    stop_early,
-                )).await;
+                ).await;
                 return;
             }
 
             let handler = match get_protocol(&target.protocol) {
                 Some(h) => h,
                 None => {
-                    let _ = send_result(&external_tx, (
+                    let _ = send_result(&external_tx,
                         AuthResult::new(
-                        target.host.clone(), target.port, &target.protocol,
-                        credential.username.clone(), credential.password.clone(),
+                            target.host.clone(), target.port, &target.protocol,
+                            credential.username.clone(), credential.password.clone(),
                             false, Duration::ZERO,
                             Some(format!("Unsupported protocol: {}", target.protocol)),
                         ),
-                        stop_early,
-                    )).await;
+                    ).await;
                     return;
                 }
             };
 
             let mut last_result = None;
-            let mut current_proxy = if proxies.is_empty() {
+            let proxy_count = proxies.len();
+            let mut proxy_idx: usize = 0;
+            let mut current_proxy = if proxy_count == 0 {
                 None
             } else {
                 Some(proxies[0].clone())
@@ -133,13 +130,12 @@ impl WorkerPool {
 
                 if crate::utils::patterns::should_skip_user(&classified) {
                     skipped.insert(credential.username.clone());
-                    let _ = send_result(&external_tx, (
+                    let _ = send_result(&external_tx,
                         AuthResult {
                             error: Some(format!("Account locked: {}", classified.message)),
                             ..result
                         },
-                        stop_early,
-                    )).await;
+                    ).await;
                     return;
                 }
 
@@ -148,11 +144,12 @@ impl WorkerPool {
                     break;
                 }
 
-                if crate::utils::patterns::should_rotate_proxy(&classified) && current_proxy.is_some() {
+                if crate::utils::patterns::should_rotate_proxy(&classified) && proxy_count > 0 {
+                    proxy_idx = (proxy_idx + 1) % proxy_count;
+                    current_proxy = Some(proxies[proxy_idx].clone());
                     for f in proxy_fails.iter() {
                         f.fetch_add(1, Ordering::Relaxed);
                     }
-                    current_proxy = None;
                 }
 
                 if attempt == retries {
@@ -164,7 +161,7 @@ impl WorkerPool {
             }
 
             if let Some(r) = last_result {
-                let _ = send_result(&external_tx, (r, stop_early)).await;
+                let _ = send_result(&external_tx, r).await;
             }
         });
     }
@@ -182,7 +179,7 @@ impl WorkerPool {
     }
 }
 
-async fn send_result(tx: &Option<mpsc::UnboundedSender<(AuthResult, bool)>>, result: (AuthResult, bool)) {
+async fn send_result(tx: &Option<mpsc::UnboundedSender<AuthResult>>, result: AuthResult) {
     if let Some(ref t) = tx {
         let _ = t.send(result);
     }

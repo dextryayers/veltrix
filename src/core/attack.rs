@@ -360,7 +360,7 @@ impl AttackOrchestrator {
             self.targets.len(), self.credentials.len(), total_combinations));
 
         let mut pool = WorkerPool::new(&self.config, Arc::clone(&self.running), self.proxies.clone());
-        let (result_tx, mut result_rx) = mpsc::unbounded_channel();
+        let (result_tx, mut result_rx): (mpsc::UnboundedSender<AuthResult>, _) = mpsc::unbounded_channel();
 
         let target_count = self.targets.len();
         let cred_count = self.credentials.len();
@@ -379,7 +379,6 @@ impl AttackOrchestrator {
                 }
             }
         }
-        let mut first_success_found = false;
         let mut stop_early = false;
 
         fn ordinal(n: u64) -> String {
@@ -399,7 +398,7 @@ impl AttackOrchestrator {
         }
 
         fn drain_results(
-            result_rx: &mut mpsc::UnboundedReceiver<(AuthResult, bool)>,
+            result_rx: &mut mpsc::UnboundedReceiver<AuthResult>,
             output: &mut OutputHandler,
             results: &mut Vec<AuthResult>,
             session: &mut Option<SessionState>,
@@ -410,24 +409,28 @@ impl AttackOrchestrator {
             let mut found_success = false;
             loop {
                 match result_rx.try_recv() {
-                    Ok((result, _stop_early)) => {
+                    Ok(result) => {
                         if result.success {
                             *successes_global += 1;
                             found_success = true;
-                        } else if result.error.is_some() {
-                            *errors_global += 1;
-                        } else {
-                            *failures_global += 1;
-                        }
-
-                        if let Some(ref mut s) = session {
-                            s.mark_tested(&result.username, &result.password);
-                            if result.success {
+                            if let Some(ref mut s) = session {
+                                s.mark_tested(&result.username, &result.password);
                                 s.add_success(&result.target_host, &result.protocol, &result.username, &result.password);
                             }
+                            output.on_result(&result);
+                            results.push(result);
+                        } else {
+                            if result.error.is_some() {
+                                *errors_global += 1;
+                            } else {
+                                *failures_global += 1;
+                            }
+                            if let Some(ref mut s) = session {
+                                s.mark_tested(&result.username, &result.password);
+                            }
+                            output.on_result(&result);
+                            results.push(result);
                         }
-                        output.on_result(&result);
-                        results.push(result);
                     }
                     Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
                     Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
@@ -436,34 +439,73 @@ impl AttackOrchestrator {
             found_success
         }
 
-        async fn prompt_continue(count: u64) -> bool {
+        // ── prompt: suspend progress bars, print, read stdin, resume bars ──
+        fn prompt_sync(count: u64, _multi: &indicatif::MultiProgress) -> bool {
             use std::io::Write;
-            use tokio::io::AsyncBufReadExt;
+            let ord = ordinal(count);
+            _multi.suspend(|| {
+                println!();
+                println!("  {} {} {}",
+                    format!("{} credential FOUND!", ord).green().bold(),
+                    format!("(total found: {})", count).white(),
+                    "Continue attacking? [y/N]:".white().bold(),
+                );
+                print!("  >> ");
+                let _ = std::io::stdout().flush();
+                let mut input = String::new();
+                let _ = std::io::stdin().read_line(&mut input);
+                input.trim().to_lowercase() == "y" || input.trim().to_lowercase() == "yes"
+            })
+        }
+
+        // ── fallback prompt when no dashboard ──
+        fn prompt_plain_sync(count: u64) -> bool {
+            use std::io::Write;
             let ord = ordinal(count);
             println!();
-            println!("  {}",
-                "┌──────────────────────────────────────┐".bright_black(),
-            );
-            println!("  │  {} {}",
+            println!("  {} {} {}",
                 format!("{} credential FOUND!", ord).green().bold(),
                 format!("(total found: {})", count).white(),
+                "Continue attacking? [y/N]:".white().bold(),
             );
-            println!("  │  {}",
-                "Continue attacking? [y/N]: ".white().bold(),
-            );
-            print!("  │  {} ", ">>".green().bold());
+            print!("  >> ");
             let _ = std::io::stdout().flush();
             let mut input = String::new();
-            let mut reader = tokio::io::BufReader::new(tokio::io::stdin());
-            reader.read_line(&mut input).await.ok();
-            let input = input.trim().to_lowercase();
-            input == "y" || input == "yes"
+            let _ = std::io::stdin().read_line(&mut input);
+            input.trim().to_lowercase() == "y" || input.trim().to_lowercase() == "yes"
+        }
+
+        async fn check_and_prompt(
+            stop_early: &mut bool,
+            successes_global: u64,
+            last_prompted_count: &mut u64,
+            config: &AttackConfig,
+            multi: Option<&indicatif::MultiProgress>,
+        ) -> bool {
+            if successes_global <= *last_prompted_count { return true; }
+            *last_prompted_count = successes_global;
+            if config.stop_on_first {
+                *stop_early = true;
+                log::info!("stop-on-first enabled, halting after first success");
+                return false;
+            }
+            let answer = match multi {
+                Some(m) => tokio::task::block_in_place(|| prompt_sync(successes_global, m)),
+                None => prompt_plain_sync(successes_global),
+            };
+            if !answer {
+                *stop_early = true;
+                log::info!("User requested stop after {} successes", successes_global);
+                return false;
+            }
+            true
         }
 
         const BATCH: usize = 256;
         let mut batch_submitted = 0usize;
         let mut status_counter = 0usize;
 
+        let multi: Option<indicatif::MultiProgress> = self.output.dashboard.as_ref().map(|d| d.multi().clone());
         let arc_targets: Vec<Arc<Target>> = self.targets.iter().map(|t| Arc::new(t.clone())).collect();
         let arc_credentials: Vec<Arc<Credential>> = self.credentials.iter().map(|c| Arc::new(c.clone())).collect();
 
@@ -503,40 +545,37 @@ impl AttackOrchestrator {
                 batch_submitted += 1;
 
                 if batch_submitted >= BATCH {
-                    drain_results(
+                    let found = drain_results(
                         &mut result_rx, &mut self.output, &mut self.results,
                         &mut self.session,
                         &mut successes_global, &mut failures_global,
                         &mut errors_global,
                     );
                     batch_submitted = 0;
+                    if found && !check_and_prompt(
+                        &mut stop_early, successes_global,
+                        &mut last_prompted_count,
+                        &self.config, multi.as_ref(),
+                    ).await {
+                        break 'outer;
+                    }
                 }
             }
 
             // Drain & prompt after each target's credentials
             if batch_submitted > 0 {
-                drain_results(
+                let found = drain_results(
                     &mut result_rx, &mut self.output, &mut self.results,
                     &mut self.session,
                     &mut successes_global, &mut failures_global,
                     &mut errors_global,
                 );
                 batch_submitted = 0;
-            }
-
-            if successes_global > last_prompted_count {
-                last_prompted_count = successes_global;
-                if self.config.stop_on_first {
-                    stop_early = true;
-                    log::info!("stop-on-first enabled, halting after first success");
-                    break 'outer;
-                }
-                if !first_success_found {
-                    first_success_found = true;
-                }
-                if !prompt_continue(successes_global).await {
-                    stop_early = true;
-                    log::info!("User requested stop after {} successes", successes_global);
+                if found && !check_and_prompt(
+                    &mut stop_early, successes_global,
+                    &mut last_prompted_count,
+                    &self.config, multi.as_ref(),
+                ).await {
                     break 'outer;
                 }
             }

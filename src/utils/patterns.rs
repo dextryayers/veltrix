@@ -169,18 +169,21 @@ pub fn classify_error(error: Option<&str>, success: bool) -> ClassifiedError {
 
     if msg.contains("refused") || msg.contains("unreachable")
         || msg.contains("dns") || msg.contains("resolve")
+        || msg.contains("server error")
+        || msg.contains("http 5")
     {
         return ClassifiedError {
             category: ResponseCategory::ConnectionError,
             message: msg.to_string(),
             _retryable: true,
             _should_backoff: true,
-            should_rotate_proxy: false,
+            should_rotate_proxy: true,
         };
     }
 
+    let lower_msg = msg.to_lowercase();
     for &(ref cat, ref prefixes) in PROTO_PREFIXES {
-        if prefixes.iter().any(|p| msg.contains(p)) {
+        if prefixes.iter().any(|p| lower_msg.contains(p)) {
             let lockout = *cat == ResponseCategory::AccountLocked;
             let rate = *cat == ResponseCategory::RateLimited;
             return ClassifiedError {

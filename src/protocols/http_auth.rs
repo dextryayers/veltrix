@@ -72,7 +72,7 @@ pub async fn http_basic_auth(
                 target.host.clone(), target.port, proto_name,
                 credential.username.clone(), credential.password.clone(),
                 success, start.elapsed(),
-                if success { None } else { Some(format!("HTTP {}", status)) },
+                if success { None } else { Some(format!("HTTP {} {}", status, if status >= 500 { "(server error)" } else { "" })) },
             )
         }
         Ok(Err(e)) => AuthResult::new(

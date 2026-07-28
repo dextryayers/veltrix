@@ -109,7 +109,7 @@ impl Protocol for VncProtocol {
                     return Ok(AuthResult::new(
                         target.host.clone(), target.port, "vnc",
                         credential.username.clone(), credential.password.clone(),
-                        false, start.elapsed(), Some("VNC auth failed (no security)".into()),
+                        false, start.elapsed(), Some(format!("VNC auth failed (no security) result={}", result_val)),
                     ));
                 }
             }
@@ -148,7 +148,7 @@ impl Protocol for VncProtocol {
                     Ok(AuthResult::new(
                         target.host.clone(), target.port, "vnc",
                         credential.username.clone(), credential.password.clone(),
-                        false, start.elapsed(), Some("VNC auth failed".into()),
+                        false, start.elapsed(), Some(format!("VNC auth failed result={}", result_val)),
                     ))
                 }
             } else {
