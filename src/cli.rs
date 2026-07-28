@@ -320,7 +320,7 @@ pub struct Cli {
     #[arg(long = "rate-limit", help = "Max attempts/sec (0=unlimited)", value_name = "N", global = true)]
     pub rate_limit: Option<u64>,
 
-    #[arg(long = "retries", help = "Connection retries", default_value = "1", value_name = "N", global = true)]
+    #[arg(long = "retries", help = "Connection retries", default_value = "2", value_name = "N", global = true)]
     pub retries: u32,
 
     #[arg(long = "stop-on-first", help = "Stop after first success per target", global = true)]

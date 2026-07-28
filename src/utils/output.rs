@@ -102,12 +102,12 @@ impl LiveDashboard {
 
         let spinner = _multi.add(ProgressBar::new(unlimited));
         spinner.set_style(
-            ProgressStyle::with_template("{spinner:.green} {msg}")
+            ProgressStyle::with_template("{spinner:.green.bold} {msg}")
             .unwrap()
-            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+            .tick_chars("▉▊▋▌▍▎▏▎▍▌▋▊▉")
         );
         spinner.set_message(format!("{} initializing...", tag));
-        spinner.enable_steady_tick(Duration::from_millis(80));
+        spinner.enable_steady_tick(Duration::from_millis(60));
 
         let progress = _multi.add(ProgressBar::new(unlimited));
         progress.set_style(
@@ -153,6 +153,12 @@ impl LiveDashboard {
         })
     }
 
+    fn rainbow_colors(&self) -> &'static str {
+        const COLORS: &[&str] = &["green", "cyan", "blue", "magenta", "red", "yellow"];
+        let idx = (self.total_attempts / 3) as usize % COLORS.len();
+        COLORS[idx]
+    }
+
     fn update_progress(&self) {
         let now = Instant::now();
         if now.duration_since(self.last_visual_update.get()) < Duration::from_millis(50) && self.total_attempts > 0 {
@@ -161,6 +167,13 @@ impl LiveDashboard {
         }
         self.last_visual_update.set(now);
         self.progress.set_position(self.total_attempts);
+        let color = self.rainbow_colors();
+        let template = format!("{{spinner:.{}.bold}} {{msg}}", color);
+        self.spinner.set_style(
+            ProgressStyle::with_template(&template)
+            .unwrap()
+            .tick_chars("▉▊▋▌▍▎▏▎▍▌▋▊▉")
+        );
         let elapsed = self.start_time.elapsed();
         let elapsed_str = if elapsed.as_secs() == 0 { "--".into() } else { fmt_dur(elapsed) };
         let rate_str = if self.current_rate > 0.0 {
@@ -172,9 +185,9 @@ impl LiveDashboard {
         self.spinner.set_message(format!(
             "{}  {}  {}  {}  {}  {}",
             self.spinner_message_tag(),
-            format!("{}", self.total_attempts).dimmed(),
-            format!("found:{}", self.success_count).green(),
-            format!("fail:{}", self.fail_count).red(),
+            format!("{}", self.total_attempts).white().bold(),
+            format!("found:{}", self.success_count).green().bold(),
+            format!("fail:{}", self.fail_count).red().bold(),
             format!("{}", elapsed_str).cyan(),
             format!("{}", rate_str).yellow(),
         ));
@@ -233,8 +246,7 @@ impl LiveDashboard {
     }
 
     fn println_stdout(&self, msg: String) {
-        use std::io::Write;
-        let _ = writeln!(std::io::stdout(), "{}", msg);
+        let _ = self._multi.println(msg);
     }
 
     pub fn on_result(&mut self, result: &AuthResult) {

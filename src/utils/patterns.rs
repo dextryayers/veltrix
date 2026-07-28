@@ -36,6 +36,36 @@ const AUTH_FAIL_PATTERNS: &[&str] = &[
     "invalid username",
     "user unknown",
     "unknown user",
+    "does not have access",
+    "name or password is incorrect",
+    "username or password",
+    "logon failure",
+    "logon failed",
+    "authentication rejected",
+];
+
+const TRANSIENT_PATTERNS: &[&str] = &[
+    "broken pipe",
+    "connection reset",
+    "connection closed",
+    "eof",
+    "end of file",
+    "stream error",
+    "i/o error",
+    "session closed",
+    "channel failure",
+    "would block",
+    "interrupted",
+    "socket error",
+    "method not allowed",
+    "method not supported",
+    "connection aborted",
+    "connection refused",
+    "no route",
+    "network unreachable",
+    "host unreachable",
+    "shutdown",
+    "not connected",
 ];
 
 const LOCKOUT_PATTERNS: &[&str] = &[
@@ -47,6 +77,15 @@ const LOCKOUT_PATTERNS: &[&str] = &[
     "account suspended",
     "account is locked",
     "maximum login attempts",
+    "login attempts exceeded",
+    "account locked out",
+    "password expired",
+    "account expired",
+    "account has been locked",
+    "this account is locked",
+    "access denied..locked",
+    "user locked",
+    "temporarily unavailable",
 ];
 
 const RATE_LIMIT_PATTERNS: &[&str] = &[
@@ -54,14 +93,29 @@ const RATE_LIMIT_PATTERNS: &[&str] = &[
     "too many requests",
     "slow down",
     "try again later",
-    "exceeded",
     "too many connections",
     "too many authentication failures",
     "please wait",
     "throttl",
+    "busy",
+    "service unavailable",
+    "max connections",
+    "overloaded",
+    "server too busy",
 ];
 
 const PROTO_PREFIXES: &[(ResponseCategory, &[&str])] = &[
+    (ResponseCategory::AccountLocked, &[
+        "530 account", "535 account", "550 account",
+        "530 user", "535 user",
+    ]),
+    (ResponseCategory::RateLimited, &[
+        "421 ", "421-", // FTP too many connections
+        "452 ", "452-", // SMTP rate limited
+        "450 ", // SMTP mailbox unavailable (temp)
+        "451 ", // local error
+        "too many bad",
+    ]),
     (ResponseCategory::AuthFailure, &[
         "530 ", "530-", "530\t", // FTP not logged in
         "535 ", "535-", // SMTP auth failure
@@ -71,22 +125,7 @@ const PROTO_PREFIXES: &[(ResponseCategory, &[&str])] = &[
         "a001 bad ", "a002 bad ", "a003 bad ", "a004 bad ", // IMAP tagged BAD
         "28000", "28P01", // PostgreSQL auth failure
         "1045", // MySQL access denied
-    ]),
-    (ResponseCategory::AccountLocked, &[
-        "account locked", "account disabled", "account blocked", "account suspended",
-        "account is locked", "maximum login attempts", "too many failed",
-        "account temporarily", "account locked out",
-        "password expired", "account expired",
-        "account has been locked", "this account is locked",
-        "530 account", "535 account",
-    ]),
-    (ResponseCategory::RateLimited, &[
-        "rate limit", "too many requests", "slow down", "try again later",
-        "too many connections", "too many authentication failures",
-        "please wait", "throttl", "exceeded",
-        "421 ", "421-", // FTP too many connections
-        "452 ", "452-", // SMTP rate limited
-        "too many bad", "access denied..rate",
+        "504 5.7.4", // SMTP auth method mismatch
     ]),
 ];
 
@@ -107,6 +146,38 @@ pub fn classify_error(error: Option<&str>, success: bool) -> ClassifiedError {
     }
 
     let msg = error.unwrap_or("Unknown error");
+
+    if matches_any(msg, TRANSIENT_PATTERNS) {
+        return ClassifiedError {
+            category: ResponseCategory::ConnectionError,
+            message: msg.to_string(),
+            _retryable: true,
+            _should_backoff: true,
+            should_rotate_proxy: true,
+        };
+    }
+
+    if msg.contains("timed out") || msg.contains("Timeout") || msg.contains("timeout") {
+        return ClassifiedError {
+            category: ResponseCategory::Timeout,
+            message: msg.to_string(),
+            _retryable: true,
+            _should_backoff: true,
+            should_rotate_proxy: false,
+        };
+    }
+
+    if msg.contains("refused") || msg.contains("unreachable")
+        || msg.contains("dns") || msg.contains("resolve")
+    {
+        return ClassifiedError {
+            category: ResponseCategory::ConnectionError,
+            message: msg.to_string(),
+            _retryable: true,
+            _should_backoff: true,
+            should_rotate_proxy: false,
+        };
+    }
 
     for &(ref cat, ref prefixes) in PROTO_PREFIXES {
         if prefixes.iter().any(|p| msg.contains(p)) {
@@ -148,28 +219,6 @@ pub fn classify_error(error: Option<&str>, success: bool) -> ClassifiedError {
             message: msg.to_string(),
             _retryable: false,
             _should_backoff: false,
-            should_rotate_proxy: false,
-        };
-    }
-
-    if msg.contains("timed out") || msg.contains("Timeout") || msg.contains("timeout") {
-        return ClassifiedError {
-            category: ResponseCategory::Timeout,
-            message: msg.to_string(),
-            _retryable: true,
-            _should_backoff: true,
-            should_rotate_proxy: false,
-        };
-    }
-
-    if msg.contains("refused") || msg.contains("reset") || msg.contains("unreachable")
-        || msg.contains("dns") || msg.contains("resolve")
-    {
-        return ClassifiedError {
-            category: ResponseCategory::ConnectionError,
-            message: msg.to_string(),
-            _retryable: true,
-            _should_backoff: true,
             should_rotate_proxy: false,
         };
     }

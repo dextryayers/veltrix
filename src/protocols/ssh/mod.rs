@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use std::time::{Duration, Instant};
-use ssh2::Session;
+use ssh2::{Session, KeyboardInteractivePrompt, Prompt};
 use tokio::time::timeout;
 
 use crate::core::credential::Credential;
@@ -11,6 +11,25 @@ use super::Protocol;
 use super::tcp::{connect_optimized, tune_tcp};
 
 pub struct SshProtocol;
+
+struct PwdPrompt {
+    password: String,
+}
+
+impl KeyboardInteractivePrompt for PwdPrompt {
+    fn prompt<'a>(
+        &mut self,
+        _username: &str,
+        _instructions: &str,
+        prompts: &[Prompt<'a>],
+    ) -> Vec<String> {
+        prompts.iter()
+            .map(|p| {
+                if p.echo { String::new() } else { self.password.clone() }
+            })
+            .collect()
+    }
+}
 
 #[async_trait]
 impl Protocol for SshProtocol {
@@ -65,17 +84,38 @@ impl Protocol for SshProtocol {
                         false, start.elapsed(), Some(format!("SSH handshake: {}", e)),
                     ));
                 }
+                let pwd = password.clone();
                 match session.userauth_password(&username, &password) {
                     Ok(()) => Ok(AuthResult::new(
                         target_c.host, target_c.port, "ssh",
                         username, password,
                         true, start.elapsed(), None,
                     )),
-                    Err(e) => Ok(AuthResult::new(
-                        target_c.host, target_c.port, "ssh",
-                        username, password,
-                        false, start.elapsed(), Some(e.to_string()),
-                    )),
+                    Err(e) => {
+                        if e.code() == ssh2::ErrorCode::Session(-18) {
+                            return Ok(AuthResult::new(
+                                target_c.host, target_c.port, "ssh",
+                                username, password,
+                                false, start.elapsed(), Some(e.to_string()),
+                            ));
+                        }
+                        let mut pwd_prompt = PwdPrompt { password: pwd };
+                        match session.userauth_keyboard_interactive(
+                            &username,
+                            &mut pwd_prompt,
+                        ) {
+                            Ok(()) => Ok(AuthResult::new(
+                                target_c.host, target_c.port, "ssh",
+                                username, password,
+                                true, start.elapsed(), None,
+                            )),
+                            Err(e2) => Ok(AuthResult::new(
+                                target_c.host, target_c.port, "ssh",
+                                username, password,
+                                false, start.elapsed(), Some(e2.to_string()),
+                            )),
+                        }
+                    }
                 }
             }).await.map_err(|e| format!("Task error: {}", e))?;
 

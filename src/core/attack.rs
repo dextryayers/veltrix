@@ -3,6 +3,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use chrono::Utc;
+use colored::Colorize;
 use futures::future::join_all;
 use tokio::sync::{Semaphore, mpsc};
 
@@ -154,48 +155,67 @@ impl AttackOrchestrator {
 
         if let Some(combo_path) = &config.combo_file {
             let combos = load_combo_list(combo_path).await?;
+            let combo_count = combos.len();
             for (user, pass) in combos {
                 credentials.push(Credential::new(user, pass));
             }
+            println!("  {} {} {}",
+                "Combo file:".bold().cyan(),
+                combo_count.to_string().white(),
+                "user:pass pairs loaded".dimmed(),
+            );
             return Ok(credentials);
         }
 
         let mut users: Vec<String> = Vec::new();
+        let mut user_sources = Vec::new();
         if !config.users.is_empty() {
+            let count = config.users.len();
             users.extend(config.users.clone());
+            user_sources.push(format!("{} individual", count));
         }
         if let Some(user_path) = &config.user_file {
             let file_users = load_wordlist(user_path).await?;
+            let count = file_users.len();
             users.extend(file_users);
+            user_sources.push(format!("{} from {:?}", count, user_path));
         }
         if users.is_empty() {
             return Err(AttackError::config("No users provided"));
         }
 
         let mut passwords: Vec<String> = Vec::new();
+        let mut pass_sources = Vec::new();
         if !config.passwords.is_empty() {
+            let count = config.passwords.len();
             passwords.extend(config.passwords.clone());
+            pass_sources.push(format!("{} individual", count));
         }
         if let Some(pass_path) = &config.password_file {
             let base_passwords = load_wordlist(pass_path).await?;
+            let base_count = base_passwords.len();
             let expanded = if let Some(rule_path) = &config.rule_file {
                 if Path::new(rule_path).exists() {
                     match load_rules(rule_path) {
                         Ok(rules) => {
                             log::info!("Loaded {} mutation rules from {:?}", rules.len(), rule_path);
                             let mutated = apply_rules(&base_passwords, &rules, config.max_mutations);
-                            log::info!("Expanded {} passwords to {} via rules", base_passwords.len(), mutated.len());
+                            log::info!("Expanded {} passwords to {} via rules", base_count, mutated.len());
+                            pass_sources.push(format!("{} raw → {} mutated from {:?}", base_count, mutated.len(), pass_path));
                             mutated
                         }
                         Err(e) => {
                             log::warn!("Failed to load rules: {}. Using base passwords.", e);
+                            pass_sources.push(format!("{} from {:?} (rules failed)", base_count, pass_path));
                             base_passwords
                         }
                     }
                 } else {
+                    pass_sources.push(format!("{} from {:?}", base_count, pass_path));
                     base_passwords
                 }
             } else {
+                pass_sources.push(format!("{} from {:?}", base_count, pass_path));
                 base_passwords
             };
             passwords.extend(expanded);
@@ -205,8 +225,22 @@ impl AttackOrchestrator {
         }
 
         credentials = build_credentials(config, &users, &passwords);
-        log::info!("Loaded {} credentials ({} users × {} passwords)",
-            credentials.len(), users.len(), passwords.len(),
+        let total = users.len() * passwords.len();
+        println!();
+        println!("  {} {} {}",
+            "Users:".bold().cyan(),
+            users.len().to_string().white().bold(),
+            format!("({})", user_sources.join(" + ")).dimmed(),
+        );
+        println!("  {} {} {}",
+            "Passwords:".bold().cyan(),
+            passwords.len().to_string().white().bold(),
+            format!("({})", pass_sources.join(" + ")).dimmed(),
+        );
+        println!("  {} {} {}",
+            "Combinations:".bold().green(),
+            credentials.len().to_string().white().bold(),
+            format!("({} users × {} passwords)", users.len(), passwords.len()).yellow(),
         );
         Ok(credentials)
     }
@@ -286,14 +320,12 @@ impl AttackOrchestrator {
         self.credentials = credentials;
         self.proxies = Self::load_proxies(&self.config);
 
-        let before = self.credentials.len();
-        if before > 0 {
-            let mut seen: DedupSet<(String, String)> = DedupSet::with_capacity(self.credentials.len());
-            self.credentials.retain(|c| seen.insert((c.username.clone(), c.password.clone())));
-            let removed = before - self.credentials.len();
-            if removed > 0 {
-                log::info!("Removed {} duplicate credentials", removed);
-            }
+        let cred_before_dedup = self.credentials.len();
+        let mut seen: DedupSet<(String, String)> = DedupSet::with_capacity(self.credentials.len());
+        self.credentials.retain(|c| seen.insert((c.username.clone(), c.password.clone())));
+        let dedup_removed = cred_before_dedup - self.credentials.len();
+        if dedup_removed > 0 {
+            log::info!("Removed {} duplicate credential pairs", dedup_removed);
         }
 
         if let Some(resume_path) = &self.config.resume_file {
@@ -304,8 +336,19 @@ impl AttackOrchestrator {
         }
 
         let total_combinations = self.targets.len() * self.credentials.len();
-        log::info!("Starting attack: {} targets × {} credentials ({} total attempts)",
+        log::info!("Starting attack: {} targets × {} credentials = {} total combinations",
             self.targets.len(), self.credentials.len(), total_combinations);
+
+        println!();
+        println!("  {} {} {} {} {} {}",
+            "Targets:".bold().cyan(),
+            self.targets.len().to_string().white(),
+            "×".dimmed(),
+            "Credentials:".bold().cyan(),
+            self.credentials.len().to_string().white(),
+            format!("= {} total attempts", total_combinations).yellow().bold(),
+        );
+        println!();
 
         self.output.init_dashboard(
             protocol_name,
@@ -325,6 +368,35 @@ impl AttackOrchestrator {
         let mut successes_global = 0u64;
         let mut failures_global = 0u64;
         let mut errors_global = 0u64;
+        let mut last_prompted_count = 0u64;
+
+        // ── Always-on anti-duplicate: track tested pairs in memory ──
+        let mut tested_creds: DedupSet<(String, String)> = DedupSet::with_capacity(self.credentials.len());
+        if let Some(ref session) = self.session {
+            for c in &self.credentials {
+                if session.is_tested(&c.username, &c.password) {
+                    tested_creds.insert((c.username.clone(), c.password.clone()));
+                }
+            }
+        }
+        let mut first_success_found = false;
+        let mut stop_early = false;
+
+        fn ordinal(n: u64) -> String {
+            match n {
+                1 => "First".to_string(),
+                2 => "Second".to_string(),
+                3 => "Third".to_string(),
+                4 => "Fourth".to_string(),
+                5 => "Fifth".to_string(),
+                6 => "Sixth".to_string(),
+                7 => "Seventh".to_string(),
+                8 => "Eighth".to_string(),
+                9 => "Ninth".to_string(),
+                10 => "Tenth".to_string(),
+                _ => format!("#{}", n),
+            }
+        }
 
         fn drain_results(
             result_rx: &mut mpsc::UnboundedReceiver<(AuthResult, bool)>,
@@ -334,12 +406,14 @@ impl AttackOrchestrator {
             successes_global: &mut u64,
             failures_global: &mut u64,
             errors_global: &mut u64,
-        ) {
+        ) -> bool {
+            let mut found_success = false;
             loop {
                 match result_rx.try_recv() {
                     Ok((result, _stop_early)) => {
                         if result.success {
                             *successes_global += 1;
+                            found_success = true;
                         } else if result.error.is_some() {
                             *errors_global += 1;
                         } else {
@@ -359,31 +433,55 @@ impl AttackOrchestrator {
                     Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
                 }
             }
+            found_success
+        }
+
+        async fn prompt_continue(count: u64) -> bool {
+            use std::io::Write;
+            use tokio::io::AsyncBufReadExt;
+            let ord = ordinal(count);
+            println!();
+            println!("  {}",
+                "┌──────────────────────────────────────┐".bright_black(),
+            );
+            println!("  │  {} {}",
+                format!("{} credential FOUND!", ord).green().bold(),
+                format!("(total found: {})", count).white(),
+            );
+            println!("  │  {}",
+                "Continue attacking? [y/N]: ".white().bold(),
+            );
+            print!("  │  {} ", ">>".green().bold());
+            let _ = std::io::stdout().flush();
+            let mut input = String::new();
+            let mut reader = tokio::io::BufReader::new(tokio::io::stdin());
+            reader.read_line(&mut input).await.ok();
+            let input = input.trim().to_lowercase();
+            input == "y" || input == "yes"
         }
 
         const BATCH: usize = 256;
         let mut batch_submitted = 0usize;
         let mut status_counter = 0usize;
 
-        // Pre-arc targets and credentials to avoid cloning in the hot loop
         let arc_targets: Vec<Arc<Target>> = self.targets.iter().map(|t| Arc::new(t.clone())).collect();
         let arc_credentials: Vec<Arc<Credential>> = self.credentials.iter().map(|c| Arc::new(c.clone())).collect();
 
         'outer: for t_idx in 0..target_count {
             let target = &arc_targets[t_idx];
             for c_idx in 0..cred_count {
-                if !self.running.load(Ordering::SeqCst) {
+                if !self.running.load(Ordering::SeqCst) || stop_early {
                     break 'outer;
                 }
 
                 let credential = &arc_credentials[c_idx];
-                if let Some(ref session) = self.session {
-                    if session.is_tested(&credential.username, &credential.password) {
-                        attempt_count += 1;
-                        self.output.inc_progress();
-                        continue;
-                    }
+                // Always-on anti-duplicate
+                if tested_creds.contains(&(credential.username.clone(), credential.password.clone())) {
+                    attempt_count += 1;
+                    self.output.inc_progress();
+                    continue;
                 }
+                tested_creds.insert((credential.username.clone(), credential.password.clone()));
 
                 self.rate_limiter.wait_if_needed().await;
                 self.jitter.delay().await;
@@ -412,6 +510,34 @@ impl AttackOrchestrator {
                         &mut errors_global,
                     );
                     batch_submitted = 0;
+                }
+            }
+
+            // Drain & prompt after each target's credentials
+            if batch_submitted > 0 {
+                drain_results(
+                    &mut result_rx, &mut self.output, &mut self.results,
+                    &mut self.session,
+                    &mut successes_global, &mut failures_global,
+                    &mut errors_global,
+                );
+                batch_submitted = 0;
+            }
+
+            if successes_global > last_prompted_count {
+                last_prompted_count = successes_global;
+                if self.config.stop_on_first {
+                    stop_early = true;
+                    log::info!("stop-on-first enabled, halting after first success");
+                    break 'outer;
+                }
+                if !first_success_found {
+                    first_success_found = true;
+                }
+                if !prompt_continue(successes_global).await {
+                    stop_early = true;
+                    log::info!("User requested stop after {} successes", successes_global);
+                    break 'outer;
                 }
             }
         }
