@@ -245,6 +245,12 @@ impl LiveDashboard {
         self.update_progress();
     }
 
+    pub fn clear_bars(&self) {
+        self.spinner.finish_and_clear();
+        self.progress.finish_and_clear();
+        self.status_bar.finish_and_clear();
+    }
+
     fn println_stdout(&self, msg: String) {
         let _ = self._multi.println(msg);
     }

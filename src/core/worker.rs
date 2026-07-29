@@ -160,8 +160,18 @@ impl WorkerPool {
                 tokio::time::sleep(crate::utils::patterns::compute_backoff(attempt)).await;
             }
 
-            if let Some(r) = last_result {
-                let _ = send_result(&external_tx, r).await;
+            match last_result {
+                Some(r) => { let _ = send_result(&external_tx, r).await; }
+                None => {
+                    let _ = send_result(&external_tx,
+                        AuthResult::new(
+                            target.host.clone(), target.port, &target.protocol,
+                            credential.username.clone(), credential.password.clone(),
+                            false, Duration::ZERO,
+                            Some("Cancelled".into()),
+                        ),
+                    ).await;
+                }
             }
         });
     }
@@ -172,6 +182,12 @@ impl WorkerPool {
 
     pub async fn wait_complete(&mut self) {
         while self.tasks.join_next().await.is_some() {}
+    }
+
+    pub fn shutdown(&mut self) {
+        self.running.store(false, Ordering::SeqCst);
+        self.tasks.abort_all();
+        while self.tasks.try_join_next().is_some() {}
     }
 
     pub fn is_idle(&self) -> bool {

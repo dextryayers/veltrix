@@ -15,9 +15,35 @@ ok()    { printf "  ${GREEN}✓${NC} %s\n" "$*"; }
 warn()  { printf "  ${YELLOW}⚠${NC} %s\n" "$*"; }
 err()   { printf "  ${RED}✗${NC} %s\n" "$*"; exit 1; }
 
+SPIN_CHARS='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+
 cleanup() { rm -rf "$TMPDIR"; }
 TMPDIR=$(mktemp -d)
 trap cleanup EXIT
+
+LOG_FILE="$TMPDIR/build.log"
+
+run_with_spinner() {
+    local msg="$1"
+    shift
+    local i=0
+    "$@" > "$LOG_FILE" 2>&1 &
+    local pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        printf "\r  ${CYAN}%s${NC} %s" "${SPIN_CHARS:$i:1}" "$msg"
+        i=$(( (i + 1) % 10 ))
+        sleep 0.08
+    done
+    wait $pid
+    local rc=$?
+    if [[ $rc -eq 0 ]]; then
+        printf "\r  ${GREEN}✓${NC} %s\n" "$msg"
+    else
+        printf "\r  ${RED}✗${NC} %s\n" "$msg"
+        sed 's/^/    /' "$LOG_FILE"
+        return 1
+    fi
+}
 
 # ── Detect OS/Arch ──
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -64,15 +90,13 @@ if [[ -f "$SCRIPT_DIR/Cargo.toml" ]] && grep -q 'name = "veltrix"' "$SCRIPT_DIR/
     info "Repository found at $SCRIPT_DIR"
     cd "$SCRIPT_DIR"
 
-    info "Fetching latest source..."
-    git fetch origin 2>/dev/null || warn "Cannot fetch (no network?)"
+    run_with_spinner "Fetching latest source..." git fetch origin || warn "Cannot fetch (no network?)"
     LOCAL=$(git rev-parse HEAD 2>/dev/null || true)
     REMOTE=$(git rev-parse @{upstream} 2>/dev/null || true)
 
     NEEDS_BUILD=false
     if [[ -n "$REMOTE" && "$LOCAL" != "$REMOTE" ]]; then
-        info "Updating: $(git rev-parse --short HEAD) → $(git rev-parse --short "$REMOTE")"
-        git pull --ff-only 2>/dev/null || warn "Merge required, stashing and pulling..."
+        run_with_spinner "Updating: $(git rev-parse --short HEAD) → $(git rev-parse --short "$REMOTE")..." git pull --ff-only 2>/dev/null || warn "Merge required, stashing and pulling..."
         NEEDS_BUILD=true
     elif [[ -z "$REMOTE" ]]; then
         warn "No upstream branch, using local source"
@@ -86,9 +110,7 @@ if [[ -f "$SCRIPT_DIR/Cargo.toml" ]] && grep -q 'name = "veltrix"' "$SCRIPT_DIR/
     fi
 
     if [[ -z "$SKIP_BUILD" ]]; then
-        info "Building veltrix (release)..."
-        cargo build --release 2>&1 | sed 's/^/  /'
-        ok "Build complete"
+        run_with_spinner "Building veltrix (release)..." cargo build --release || err "Build failed"
     fi
 
     # Find the built binary
@@ -100,8 +122,7 @@ fi
 
 # ── Strategy 2: Download pre-built binary ──
 if [[ -z "$SKIP_BUILD" ]]; then
-    info "Checking for pre-built binary: ${RELEASE_URL}/${BINARY_NAME}-${ARCH_TRIPLE}"
-    if curl -sfL "${RELEASE_URL}/${BINARY_NAME}-${ARCH_TRIPLE}" -o "$TMPDIR/$BINARY_NAME"; then
+    if run_with_spinner "Downloading pre-built binary..." curl -sfL "${RELEASE_URL}/${BINARY_NAME}-${ARCH_TRIPLE}" -o "$TMPDIR/$BINARY_NAME"; then
         chmod +x "$TMPDIR/$BINARY_NAME"
         if "$TMPDIR/$BINARY_NAME" --version &>/dev/null || "$TMPDIR/$BINARY_NAME" --help &>/dev/null; then
             install_local "$TMPDIR/$BINARY_NAME"
@@ -114,16 +135,14 @@ if [[ -z "$SKIP_BUILD" ]]; then
 fi
 
 # ── Strategy 3: Clone & build ──
-info "Cloning repository..."
-git clone --depth 1 "$REPO_URL" "$REPO_DIR" 2>&1 | sed 's/^/  /'
+run_with_spinner "Cloning repository..." git clone --depth 1 "$REPO_URL" "$REPO_DIR" || err "Clone failed"
 cd "$REPO_DIR"
 
 if ! command -v cargo &>/dev/null; then
     err "Rust/Cargo not found. Install it first: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
 fi
 
-info "Building veltrix (release)..."
-cargo build --release 2>&1 | sed 's/^/  /'
+run_with_spinner "Building veltrix (release)..." cargo build --release || err "Build failed"
 ok "Build complete"
 
 install_local "target/release/$BINARY_NAME"

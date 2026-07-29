@@ -557,6 +557,7 @@ impl AttackOrchestrator {
                         &mut last_prompted_count,
                         &self.config, multi.as_ref(),
                     ).await {
+                        self.running.store(false, Ordering::SeqCst);
                         break 'outer;
                     }
                 }
@@ -576,20 +577,34 @@ impl AttackOrchestrator {
                     &mut last_prompted_count,
                     &self.config, multi.as_ref(),
                 ).await {
+                    self.running.store(false, Ordering::SeqCst);
                     break 'outer;
                 }
             }
         }
 
-        // Drain remaining results after submission
-        drop(result_tx);
-        pool.wait_complete().await;
-        drain_results(
-            &mut result_rx, &mut self.output, &mut self.results,
-            &mut self.session,
-            &mut successes_global, &mut failures_global,
-            &mut errors_global,
-        );
+        // Drain remaining results or fast-exit on user stop
+        if stop_early {
+            drop(result_tx);
+            pool.shutdown();
+            if let Some(ref dashboard) = self.output.dashboard {
+                dashboard.clear_bars();
+            }
+            println!();
+            println!("  {}",
+                "Goodbye. Stay anonymous.".green().italic(),
+            );
+            println!();
+        } else {
+            drop(result_tx);
+            pool.wait_complete().await;
+            drain_results(
+                &mut result_rx, &mut self.output, &mut self.results,
+                &mut self.session,
+                &mut successes_global, &mut failures_global,
+                &mut errors_global,
+            );
+        }
 
         if let Some(ref session) = self.session {
             if let Some(ref resume_path) = self.config.resume_file {
