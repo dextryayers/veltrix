@@ -127,7 +127,19 @@ pub fn expand_targets(inputs: &[String]) -> Vec<(String, Option<u16>)> {
 /// Hostname yang tidak bisa di-parse sebagai IP dianggap NON-lab (konservatif).
 /// IPv6: loopback ::1, link-local fe80::/10, unique-local fc00::/7.
 pub fn spec_is_lab(spec: &str) -> bool {
+    use std::net::IpAddr;
     let s = spec.trim();
+    // Bracketed IPv6 "[::1]" atau "[::1]:22".
+    if let Some(stripped) = s.strip_prefix('[') {
+        if let Some(end) = stripped.find(']') {
+            return host_is_lab_ip(&stripped[..end]);
+        }
+        return false;
+    }
+    // Literal IP langsung (termasuk "::1" yang mengandung colon).
+    if s.parse::<IpAddr>().is_ok() {
+        return host_is_lab_ip(s);
+    }
     // Pisahkan port opsional "host:port" dan CIDR "net/prefix".
     let host_part = if let Some(slash) = s.find('/') {
         &s[..slash]
@@ -145,6 +157,12 @@ pub fn spec_is_lab(spec: &str) -> bool {
         } else {
             s
         }
+    } else if s.contains('-') {
+        // Range IPv4 "a.b.c.d-e.f.g.h" (tanpa port).
+        let mut parts = s.splitn(2, '-');
+        let a = parts.next().unwrap_or("");
+        let b = parts.next().unwrap_or("");
+        return host_is_lab_ip(a) && host_is_lab_ip(b);
     } else {
         s
     };

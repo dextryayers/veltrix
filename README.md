@@ -507,6 +507,18 @@ veltrix http -t 10.0.0.20:8080 --http-userfield username --http-passfield passwo
 | `--stop-on-first` | false | Stop target after first valid credential |
 | `--spray` | false | Spray mode: one password across all users first |
 | `--single-user` | false | Only first username tested with all passwords |
+| `--spray-interval DUR` | `0` | Pause between spray rounds, e.g. 30s, 30m, 2h |
+| `--spray-jitter PCT` | `20` | Symmetric jitter percent on spray interval |
+| `--target-rate-limit N` | none | Max attempts/sec per target |
+| `--user-cooldown DUR` | `0` | Min interval per username, e.g. 500ms, 5s |
+| `--lockout-cooldown SEC` | `600` | Cooldown after account-lockout signal |
+| `--rate-cooldown SEC` | `60` | Cooldown after rate-limit signal on a target |
+| `--lockout-pause` | false | Pause for cooldown then retry instead of skipping user |
+| `--user-agent STR` | rotate | Override HTTP User-Agent pool |
+| `--safe-profile` | false | Conservative preset for production-like targets |
+| `--aggressive-lab` | false | Aggressive preset, lab networks only |
+| `--i-understand-risk` | false | Acknowledge aggressive run against non-lab targets |
+| `--only-open FILE` | none | Restrict targets to open ports in scan output file |
 | `--resume FILE` | none | Resume session file |
 | `--config FILE` | none | Base TOML/JSON config, CLI flags override file |
 | `--rule FILE` | none | Password mutation rule file |
@@ -562,9 +574,55 @@ veltrix ssh --config ./my-run.json --dry-run
 veltrix ssh -t 10.0.0.1 -U users.txt -W passwords.txt --spray --delay 1000 --dry-run
 ```
 
-Exit codes: `0` found or dry-run/validate ok, `1` no findings or runtime fail, `2` config invalid, `130` forced interrupt.
+### 8.7 Stealth, spray cadence, and cooldown (Fase 4)
 
-See `docs/protocols-v2.md` for port defaults, TLS modes, proxy chain limits, and fingerprint notes.
+Three limiter levels stack: global `--rate-limit`, per-target `--target-rate-limit`,
+and per-username `--user-cooldown` (e.g. `500ms`, `5s`), on top of `--delay` + jitter.
+
+```bash
+# Spray one password across all users, 30s +/- 20% between rounds
+veltrix ssh -t 10.0.0.1 -U users.txt -W passwords.txt --spray \
+  --spray-interval 30m --spray-jitter 20 --target-rate-limit 5 \
+  --user-cooldown 2s --lockout-cooldown 600 --rate-cooldown 60
+
+# Pause (instead of skip) on lockout, then retry after cooldown
+veltrix smb -t 10.0.0.5 -U users.txt -W passwords.txt --spray --lockout-pause
+
+# Conservative preset for production-like targets
+veltrix ssh -t 10.0.0.1 -U users.txt -W passwords.txt --safe-profile
+
+# Aggressive preset, lab networks only (RFC1918/loopback or --i-understand-risk)
+veltrix ssh -t 192.168.1.0/24 -U users.txt -W top1000.txt --aggressive-lab
+
+# Custom HTTP User-Agent (default rotates a realistic pool + cookie store)
+veltrix http -t 10.0.0.1 -u admin -W passwords.txt \
+  --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0"
+```
+
+Lockout and rate-limit signals are counted live on the dashboard (first-seen
+warning) and shown in the final summary. Exit codes: `0` found or dry-run/validate
+ok, `1` no findings or runtime fail, `2` config invalid, `130` forced interrupt.
+
+### 8.8 Auto scan-to-attack (Fase 5)
+
+```bash
+# Scan, fingerprint, attack only open attackable services
+veltrix auto -t 10.0.0.1 --ports common -U users.txt -W passwords.txt
+
+# With policy guardrails + combined JSON report
+veltrix auto -t 10.0.0.0/24 --ports 22,80,443,3306,3389 \
+  -U users.txt -W passwords.txt --policy config/auto-policy.example.toml \
+  --min-confidence 50 -o auto-report.json -f json
+
+# Attack subcommand gated by a previous scan output
+veltrix scan-ports -t 10.0.0.1 --ports common -o scan.txt
+veltrix ssh -t 10.0.0.1 -U users.txt -W passwords.txt --only-open scan.txt
+```
+
+Auto groups open ports by `(protocol, port)` using banner/product fingerprint
+with confidence 0-100 (product 90, banner rule 75, port-only 50) and skips
+services without an attack module. See `docs/protocols-v2.md` for port defaults,
+TLS modes, proxy chain limits, and fingerprint notes.
 
 ---
 

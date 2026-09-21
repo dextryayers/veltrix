@@ -65,3 +65,72 @@ fn transport_timeout_is_bounded() {
     assert_eq!(status.status.code(), Some(1));
     assert!(start.elapsed() < Duration::from_secs(30), "closed port took too long");
 }
+
+#[test]
+fn aggressive_lab_blocked_for_public_ip() {
+    // Tanpa --i-understand-risk, target publik + aggressive harus exit 2 tanpa traffic.
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_veltrix"))
+        .args(["ssh", "-t", "8.8.8.8", "-u", "admin", "--password", "x",
+               "--aggressive-lab", "--dry-run"])
+        .status()
+        .expect("run aggressive public");
+    assert_eq!(status.code(), Some(2), "aggressive-lab must refuse public targets");
+}
+
+#[test]
+fn aggressive_lab_allowed_for_rfc1918() {
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_veltrix"))
+        .args(["ssh", "-t", "192.168.1.1", "-u", "admin", "--password", "x",
+               "--aggressive-lab", "--dry-run"])
+        .status()
+        .expect("run aggressive lab");
+    assert!(status.success(), "aggressive-lab should allow RFC1918 with dry-run");
+}
+
+#[test]
+fn safe_profile_and_spray_dry_run() {
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_veltrix"))
+        .args(["ssh", "-t", "10.0.0.1", "-u", "admin", "--password", "x",
+               "--safe-profile", "--spray", "--spray-interval", "5s",
+               "--target-rate-limit", "10", "--user-cooldown", "500ms",
+               "--lockout-pause", "--dry-run"])
+        .status()
+        .expect("run safe spray dry-run");
+    assert!(status.success());
+}
+
+#[test]
+fn invalid_spray_interval_exits_2() {
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_veltrix"))
+        .args(["ssh", "-t", "10.0.0.1", "-u", "admin", "--password", "x",
+               "--spray-interval", "bogus"])
+        .status()
+        .expect("run bad interval");
+    assert_eq!(status.code(), Some(2));
+}
+
+#[test]
+fn safe_and_aggressive_conflict_exits_2() {
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_veltrix"))
+        .args(["ssh", "-t", "10.0.0.1", "-u", "admin", "--password", "x",
+               "--safe-profile", "--aggressive-lab"])
+        .status()
+        .expect("run conflicting presets");
+    assert_eq!(status.code(), Some(2));
+}
+
+#[test]
+fn auto_no_open_ports_exits_1_fast() {
+    // Scan 1 closed port di localhost: cepat, lalu auto lapor tidak ada grup.
+    let start = std::time::Instant::now();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_veltrix"))
+        .args(["auto", "-t", "127.0.0.1", "--ports", "59999",
+               "--scan-timeout", "1", "--rate", "10",
+               "-u", "admin", "--password", "x"])
+        .output()
+        .expect("run auto no-open");
+    assert_eq!(out.status.code(), Some(1), "auto with no open ports should exit 1");
+    assert!(start.elapsed() < Duration::from_secs(60));
+    let text = String::from_utf8_lossy(&out.stderr).into_owned() + &String::from_utf8_lossy(&out.stdout);
+    assert!(text.to_lowercase().contains("no attackable"), "auto should explain empty groups");
+}
