@@ -211,6 +211,7 @@ mod tests {
             aggressive_lab: false,
             i_understand_risk: false,
             only_open: None,
+            show_secrets: false,
         }
     }
 

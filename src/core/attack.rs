@@ -14,7 +14,7 @@ use super::credential_stream::{CredentialStream, ExpandMode};
 use super::error::AttackError;
 use super::metrics::AttackMetrics;
 use super::planner::AttackPlan;
-use super::result::{AttackSummary, AuthResult};
+use super::result::{AttackSummary, AuthResult, ProgressTick};
 use super::rules::{apply_rules, load_rules};
 use super::target::{parse_targets, Target};
 use super::wordlist::{load_combo_list, load_wordlist};
@@ -40,6 +40,9 @@ pub struct AttackOrchestrator {
     target_throttle: KeyedThrottle,
     user_throttle: KeyedThrottle,
     spray_cadence: SprayCadence,
+    // F6.1/F6.4: identitas run + hook progres API.
+    run_id: String,
+    progress_tx: Option<mpsc::UnboundedSender<ProgressTick>>,
     running: Arc<AtomicBool>,
 }
 
@@ -47,10 +50,14 @@ impl AttackOrchestrator {
     pub async fn new(config: AttackConfig, running: Arc<AtomicBool>) -> Result<Self, AttackError> {
         config.validate()?;
 
+        // F6.1: run_id unik per eksekusi, dipakai skema JSON v2 + API + report.
+        let run_id = uuid::Uuid::new_v4().to_string();
         let output = OutputHandler::new(
             config.output_format.clone(),
             config.output_file.as_deref(),
             config.verbose as u8,
+            &run_id,
+            config.show_secrets,
         )?;
 
         if let Some(ref domain) = config.rdp_domain {
@@ -89,9 +96,21 @@ impl AttackOrchestrator {
             target_throttle,
             user_throttle,
             spray_cadence,
+            run_id,
+            progress_tx: None,
             config,
             running,
         })
+    }
+
+    pub fn run_id(&self) -> &str {
+        &self.run_id
+    }
+
+    /// Hook progres untuk job queue non-blocking API (F6.4).
+    /// Dipanggil sebelum run(); tick dikirim tiap batch drain.
+    pub fn set_progress_hook(&mut self, tx: mpsc::UnboundedSender<ProgressTick>) {
+        self.progress_tx = Some(tx);
     }
 
     pub async fn load_targets_for_distributed(config: &AttackConfig) -> Result<Vec<Target>, AttackError> {
@@ -746,6 +765,15 @@ impl AttackOrchestrator {
                         &mut metrics,
                     );
                     batch_submitted = 0;
+                    // F6.4: tick progres untuk job API non-blocking.
+                    if let Some(ref tx) = self.progress_tx {
+                        let _ = tx.send(ProgressTick {
+                            attempts: attempt_count,
+                            successes: successes_global,
+                            failures: failures_global,
+                            errors: errors_global,
+                        });
+                    }
                     // Fase 1: batch adaptif berdasarkan timeout ratio.
                     let tuned = metrics.suggested_batch(batch_size);
                     if tuned != batch_size {
@@ -823,6 +851,7 @@ impl AttackOrchestrator {
         let end_time = Utc::now();
         let duration = end_time.signed_duration_since(start_time).to_std().unwrap_or_default();
         let summary = AttackSummary {
+            run_id: self.run_id.clone(),
             start_time,
             end_time: Some(end_time),
             total_targets: self.targets.len(),
@@ -844,7 +873,7 @@ impl AttackOrchestrator {
                 } else {
                     output_path.clone()
                 };
-                if let Err(e) = save_html_report(&html_path, &summary) {
+                if let Err(e) = save_html_report(&html_path, &summary, self.config.show_secrets) {
                     log::error!("Failed to save HTML report: {}", e);
                 } else {
                     log::info!("HTML report saved to {}", html_path.display());
@@ -858,6 +887,7 @@ impl AttackOrchestrator {
 
 fn empty_summary(start_time: chrono::DateTime<Utc>) -> AttackSummary {
     AttackSummary {
+        run_id: String::new(),
         start_time,
         end_time: Some(Utc::now()),
         total_targets: 0,

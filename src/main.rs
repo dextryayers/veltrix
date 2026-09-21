@@ -503,7 +503,12 @@ async fn run_auto(cli: &Cli, args: &cli::AutoArgs, running: Arc<AtomicBool>) {
                     host: r.target_host.clone(),
                     port: r.target_port,
                     user: r.username.clone(),
-                    pass: r.password.clone(),
+                    // F6.3: JSON auto report juga masked kecuali --show-secrets.
+                    pass: if cli.show_secrets {
+                        r.password.clone()
+                    } else {
+                        crate::core::result::mask_password(&r.password)
+                    },
                 })
                 .collect(),
         });
@@ -561,7 +566,13 @@ fn write_auto_report(cli: &Cli, report: &AutoReport) {
                 g.protocol, g.port, g.targets.len(), g.confidence, g.attempts, g.successes, g.reason
             ));
             for f in &g.found {
-                s.push_str(&format!("    FOUND {}:{} [{}:{}]\n", f.host, f.port, f.user, f.pass));
+                // F6.3: mask password di laporan teks kecuali --show-secrets.
+                let pw = if cli.show_secrets {
+                    f.pass.clone()
+                } else {
+                    crate::core::result::mask_password(&f.pass)
+                };
+                s.push_str(&format!("    FOUND {}:{} [{}:{}]\n", f.host, f.port, f.user, pw));
             }
         }
         s
@@ -801,6 +812,7 @@ fn default_cli_for_validate() -> Cli {
         checkpoint: 100,
         api_bind: None,
         fp_check: false,
+        show_secrets: false,
         spray_interval: "0".into(),
         spray_jitter: 20,
         target_rate_limit: None,

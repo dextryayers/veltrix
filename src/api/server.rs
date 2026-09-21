@@ -436,6 +436,7 @@ async fn handle_client(
             aggressive_lab: false,
             i_understand_risk: false,
             only_open: None,
+            show_secrets: false,
             };
 
             let job_id = cloud.submit(config, _running);

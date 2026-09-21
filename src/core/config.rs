@@ -78,6 +78,8 @@ pub struct AttackConfig {
     pub i_understand_risk: bool,
     // Fase 5: batasi attack ke hasil scan terakhir
     pub only_open: Option<PathBuf>,
+    // Fase 6: tampilkan password penuh (default masked)
+    pub show_secrets: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -324,6 +326,7 @@ mod tests {
             aggressive_lab: false,
             i_understand_risk: false,
             only_open: None,
+            show_secrets: false,
         }
     }
 

@@ -68,6 +68,7 @@ pub struct LiveDashboard {
     _cred_count: usize,
     spinner_tag: String,
     last_visual_update: std::cell::Cell<Instant>,
+    pub show_secrets: bool,
 }
 
 impl LiveDashboard {
@@ -150,6 +151,7 @@ impl LiveDashboard {
             _cred_count: cred_count,
             spinner_tag: tag.to_string(),
             last_visual_update: std::cell::Cell::new(Instant::now()),
+            show_secrets: false,
         })
     }
 
@@ -281,7 +283,14 @@ impl LiveDashboard {
     }
 
     pub fn on_result(&mut self, result: &AuthResult) {
+        use crate::core::result::mask_password;
         let show_all = self.verbose >= 1;
+        // F6.3: password tidak pernah tampil polos kecuali --show-secrets.
+        let shown_pw = if self.show_secrets {
+            result.password.clone()
+        } else {
+            mask_password(&result.password)
+        };
 
         if result.success {
             self.success_count += 1;
@@ -291,7 +300,7 @@ impl LiveDashboard {
                 format!("{}:{}", result.target_host, result.target_port).white(),
                 result.protocol.cyan(),
                 result.username.green().bold(),
-                result.password.green().bold(),
+                shown_pw.green().bold(),
             );
             self.println_stdout(msg);
         } else if result.error.is_some() {
@@ -304,7 +313,7 @@ impl LiveDashboard {
                     format!("{}:{}", result.target_host, result.target_port).dimmed(),
                     result.protocol.dimmed(),
                     result.username.yellow(),
-                    result.password.dimmed(),
+                    shown_pw.dimmed(),
                     brief.dimmed(),
                 )
             } else if show_all {
@@ -312,7 +321,7 @@ impl LiveDashboard {
                     "! {} [{}:{}]",
                     format!("{}:{}", result.target_host, result.target_port).dimmed(),
                     result.username.dimmed(),
-                    result.password.dimmed(),
+                    shown_pw.dimmed(),
                 )
             } else {
                 String::new()
@@ -327,7 +336,7 @@ impl LiveDashboard {
                     "- {} [{}:{}]",
                     format!("{}:{}", result.target_host, result.target_port).dimmed(),
                     result.username.dimmed(),
-                    result.password.dimmed(),
+                    shown_pw.dimmed(),
                 );
                 self.println_stdout(msg);
             }
@@ -336,12 +345,26 @@ impl LiveDashboard {
         self.set_status(format!(
             "{}:{} [{}:{}] ({})",
             result.target_host, result.target_port,
-            result.username, result.password,
+            result.username, shown_pw,
             if result.success { "OK" } else { "FAIL" },
         ));
 
+        self.seq += 1;
+        let run_id = self.run_id.clone();
+        let started_at = self.started_at.clone();
+        let seq = self.seq;
+        let show_secrets = self.show_secrets;
         if let Some(ref mut file) = self.file {
-            write_output(&self.format, self.writer.as_mut(), file, result);
+            write_output(
+                &self.format,
+                self.writer.as_mut(),
+                file,
+                result,
+                &run_id,
+                seq,
+                &started_at,
+                show_secrets,
+            );
         }
 
         self.update_progress();
@@ -360,7 +383,6 @@ impl LiveDashboard {
         self.spinner.finish_and_clear();
         self.progress.finish_and_clear();
         self.status_bar.finish_and_clear();
-
         let total_secs = self.start_time.elapsed().as_secs_f64();
 
         println!();
@@ -412,11 +434,16 @@ impl LiveDashboard {
             println!("{}", "│          FOUND CREDENTIALS            │".green().bold());
             println!("{}", "└──────────────────────────────────────┘".green().bold());
             for r in &successes {
-                println!("  {}", r.display().green().bold());
+                let line = if self.show_secrets { r.display_full() } else { r.display() };
+                println!("  {}", line.green().bold());
+            }
+            if !self.show_secrets {
+                println!("  {}", "(passwords masked; re-run with --show-secrets for full values)".dimmed());
             }
         }
         println!();
     }
+
     pub fn multi(&self) -> &MultiProgress {
         &self._multi
     }
@@ -430,21 +457,38 @@ impl Drop for LiveDashboard {
     }
 }
 
-fn write_output(format: &OutputFormat, csv_writer: Option<&mut csv::Writer<std::fs::File>>, file: &mut std::fs::File, result: &AuthResult) {
+fn write_output(
+    format: &OutputFormat,
+    csv_writer: Option<&mut csv::Writer<std::fs::File>>,
+    file: &mut std::fs::File,
+    result: &AuthResult,
+    run_id: &str,
+    seq: u64,
+    started_at: &str,
+    show_secrets: bool,
+) {
+    use crate::core::result::{mask_password, FindingV2};
     match format {
         OutputFormat::Json => {
-            if let Ok(json) = serde_json::to_string(result) {
+            // F6.1: satu objek FindingV2 per baris, tanpa password plaintext.
+            let f = FindingV2::from_result(result, run_id, seq, started_at);
+            if let Ok(json) = serde_json::to_string(&f) {
                 let _ = writeln!(file, "{}", json);
             }
         }
         OutputFormat::Csv => {
             if let Some(w) = csv_writer {
+                let pw = if show_secrets {
+                    result.password.clone()
+                } else {
+                    mask_password(&result.password)
+                };
                 let _ = w.write_record(&[
                     &result.target_host,
                     &result.target_port.to_string(),
                     &result.protocol,
                     &result.username,
-                    &result.password,
+                    &pw,
                     &result.success.to_string(),
                     &result.timestamp.to_rfc3339(),
                     &result.duration_ms.to_string(),
@@ -454,12 +498,14 @@ fn write_output(format: &OutputFormat, csv_writer: Option<&mut csv::Writer<std::
             }
         }
         OutputFormat::Yaml => {
-            if let Ok(yaml) = serde_yaml::to_string(result) {
+            let r = result.redacted(show_secrets);
+            if let Ok(yaml) = serde_yaml::to_string(&r) {
                 let _ = writeln!(file, "---\n{}", yaml);
             }
         }
         _ => {
-            let _ = writeln!(file, "{}", result.display());
+            let r = result.redacted(show_secrets);
+            let _ = writeln!(file, "{}", r.display_full());
         }
     }
 }
@@ -474,10 +520,20 @@ pub struct OutputHandler {
     pub success_count: u64,
     pub fail_count: u64,
     pub error_count: u64,
+    run_id: String,
+    started_at: String,
+    show_secrets: bool,
+    seq: u64,
 }
 
 impl OutputHandler {
-    pub fn new(format: OutputFormat, output_path: Option<&Path>, verbose: u8) -> Result<Self, AttackError> {
+    pub fn new(
+        format: OutputFormat,
+        output_path: Option<&Path>,
+        verbose: u8,
+        run_id: &str,
+        show_secrets: bool,
+    ) -> Result<Self, AttackError> {
         let (file, writer) = if let Some(path) = output_path {
             let f = std::fs::File::create(path)
                 .map_err(|e| AttackError::io("output", format!("Cannot create: {}", e)))?;
@@ -502,6 +558,10 @@ impl OutputHandler {
             success_count: 0,
             fail_count: 0,
             error_count: 0,
+            run_id: run_id.to_string(),
+            started_at: chrono::Utc::now().to_rfc3339(),
+            show_secrets,
+            seq: 0,
         })
     }
 
@@ -558,6 +618,7 @@ impl OutputHandler {
 
     pub fn finish(&mut self, summary: &AttackSummary) {
         if let Some(ref mut d) = self.dashboard {
+            d.show_secrets = self.show_secrets;
             d.finish(summary);
         } else {
             self.print_summary(summary);
@@ -616,7 +677,11 @@ impl OutputHandler {
             println!("{}", "│          FOUND CREDENTIALS            │".green().bold());
             println!("{}", "└──────────────────────────────────────┘".green().bold());
             for r in &successes {
-                println!("  {}", r.display().green().bold());
+                let line = if self.show_secrets { r.display_full() } else { r.display() };
+                println!("  {}", line.green().bold());
+            }
+            if !self.show_secrets {
+                println!("  {}", "(passwords masked; re-run with --show-secrets for full values)".dimmed());
             }
         }
         println!();
@@ -632,7 +697,7 @@ mod tests {
 
     #[test]
     fn test_new_no_file() {
-        let h = OutputHandler::new(OutputFormat::Plain, None, 0).unwrap();
+        let h = OutputHandler::new(OutputFormat::Plain, None, 0, "run-test", false).unwrap();
         assert!(h.file.is_none());
         assert!(h.writer.is_none());
     }
@@ -641,7 +706,7 @@ mod tests {
     fn test_new_with_file() {
         let dir = std::env::temp_dir();
         let path = dir.join("test_output.txt");
-        let h = OutputHandler::new(OutputFormat::Plain, Some(&path), 0).unwrap();
+        let h = OutputHandler::new(OutputFormat::Plain, Some(&path), 0, "run-test", false).unwrap();
         assert!(h.file.is_some());
         std::fs::remove_file(&path).ok();
     }

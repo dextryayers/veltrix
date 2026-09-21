@@ -386,6 +386,9 @@ pub struct Cli {
     #[arg(long = "fp-check", help = "Fingerprint check: re-verify claimed successes to eliminate false positives", global = true)]
     pub fp_check: bool,
 
+    #[arg(long = "show-secrets", help = "Show full passwords in console, reports, and API (default: masked)", global = true)]
+    pub show_secrets: bool,
+
     // ── F4: stealth, spray cadence, limiter, cooldown ──
     #[arg(long = "spray-interval", help = "Pause between spray rounds, e.g. 30s, 30m, 2h (requires --spray)", value_name = "DUR", default_value = "0", global = true)]
     pub spray_interval: String,
@@ -620,6 +623,7 @@ impl Cli {
             decrypt_output: self.decrypt_output.clone(),
             dry_run: self.dry_run,
             fp_check: self.fp_check,
+            show_secrets: self.show_secrets,
             spray_interval,
             spray_jitter_pct: self.spray_jitter,
             target_rate_limit: self.target_rate_limit,
