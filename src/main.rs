@@ -366,6 +366,11 @@ async fn run_attack(cli: &Cli, protocol: &str, args: &ProtocolArgs, running: Arc
 
     let summary = orchestrator.run().await;
 
+    if cli.dry_run {
+        // Dry run bukan kegagalan: plan tampil, tidak ada traffic.
+        std::process::exit(EXIT_FOUND);
+    }
+
     if let Some(ref passphrase) = encrypt_passphrase {
         encrypt_output_file(&output_file, passphrase);
     }
@@ -453,13 +458,13 @@ async fn run_create(args: &CreateArgs) {
 
 fn run_validate(args: &cli::ValidateArgs) {
     let ext = args
-        .config
+        .file
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
     let loader = Cli {
-        config_file: Some(args.config.clone()),
+        config_file: Some(args.file.clone()),
         ..default_cli_for_validate()
     };
     let mut base = default_cli_for_validate().build_attack_config(
@@ -482,7 +487,7 @@ fn run_validate(args: &cli::ValidateArgs) {
     }
     match base.validate() {
         Ok(()) => {
-            println!("Config {} is valid ({} format).", args.config.display(), if ext == "toml" { "TOML" } else { "JSON" });
+            println!("Config {} is valid ({} format).", args.file.display(), if ext == "toml" { "TOML" } else { "JSON" });
             for w in base.risk_warnings() {
                 println!("warning: {}", w);
             }

@@ -187,8 +187,8 @@ pub enum Commands {
 
 #[derive(Args, Debug, Clone)]
 pub struct ValidateArgs {
-    #[arg(long = "config", help = "Config file to validate (TOML or JSON)", value_name = "FILE")]
-    pub config: PathBuf,
+    #[arg(help = "Config file to validate (TOML or JSON)", value_name = "FILE")]
+    pub file: PathBuf,
 }
 
 #[derive(Args, Debug, Clone)]

@@ -46,7 +46,7 @@ fn validate_rejects_bad_file() {
     let path = dir.join("veltrix_bad_validate.json");
     std::fs::write(&path, "not json").unwrap();
     let status = std::process::Command::new(env!("CARGO_BIN_EXE_veltrix"))
-        .args(["validate", "--config"])
+        .args(["validate"])
         .arg(&path)
         .status()
         .expect("run validate");

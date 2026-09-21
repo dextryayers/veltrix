@@ -61,4 +61,33 @@ set -e
 [ "$SCAN_CODE" -eq 0 ] || [ "$SCAN_CODE" -eq 1 ] || fail "scan-ports unexpected exit $SCAN_CODE"
 pass "scan-ports closed port"
 
+# 9. dry-run exits 0 without traffic
+timeout 20 "$BIN" ssh -t 127.0.0.1 -u admin --password x --dry-run >/dev/null 2>&1 || fail "dry-run should exit 0"
+pass "dry-run exits 0"
+
+# 10. validate accepts good config, rejects bad
+TMPV=$(mktemp -d)
+echo '{"attack":{"targets":["127.0.0.1"],"protocols":["ssh"]},"credentials":{"users":["admin"],"passwords":["x"]}}' > "$TMPV/good.json"
+"$BIN" validate "$TMPV/good.json" >/dev/null 2>&1 || fail "validate good should pass"
+echo "not json" > "$TMPV/bad.json"
+set +e
+"$BIN" validate "$TMPV/bad.json" >/dev/null 2>&1
+VCODE=$?
+set -e
+rm -rf "$TMPV"
+[ "$VCODE" -eq 2 ] || fail "validate bad should exit 2, got $VCODE"
+pass "validate good/bad"
+
+# 11. completion renders
+"$BIN" completion bash >/dev/null 2>&1 || fail "completion bash"
+pass "completion bash"
+
+# 12. missing target exits 2
+set +e
+"$BIN" ssh -u admin --password x >/dev/null 2>&1
+MCODE=$?
+set -e
+[ "$MCODE" -eq 2 ] || fail "missing target should exit 2, got $MCODE"
+pass "missing target exits 2"
+
 echo "[OK] All smoke tests passed"

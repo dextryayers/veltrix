@@ -100,10 +100,13 @@ impl Fingerprint {
         let ev = evidence.to_lowercase();
         for m in &self.fail_markers {
             if ev.contains(&m.to_lowercase()) {
-                return FingerprintVerdict::Contradicted(format!(
-                    "{} claims success but evidence contains fail marker '{}'",
-                    self.protocol, m
-                ));
+                if success_claim {
+                    return FingerprintVerdict::Contradicted(format!(
+                        "{} claims success but evidence contains fail marker '{}'",
+                        self.protocol, m
+                    ));
+                }
+                return FingerprintVerdict::ConsistentFail;
             }
         }
         if success_claim {
