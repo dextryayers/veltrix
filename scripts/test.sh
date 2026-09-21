@@ -8,7 +8,7 @@ echo "========================"
 
 echo ""
 echo "[1/4] Unit tests"
-cargo test --lib --manifest-path "$DIR/Cargo.toml"
+cargo test --manifest-path "$DIR/Cargo.toml"
 
 echo ""
 echo "[2/4] Doc tests"

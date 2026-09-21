@@ -18,7 +18,7 @@ build: build-release
 
 # ── Test ──
 test-unit:
-	$(CARGO) test --lib
+	$(CARGO) test
 
 test-integration:
 	docker compose -f docker/docker-compose.test.yml up -d

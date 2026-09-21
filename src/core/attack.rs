@@ -228,7 +228,6 @@ impl AttackOrchestrator {
         }
 
         credentials = build_credentials(config, &users, &passwords);
-        let total = users.len() * passwords.len();
         println!();
         println!("  {} {} {}",
             "Users:".bold().cyan(),
