@@ -60,6 +60,8 @@ pub struct AttackConfig {
     pub encrypt_passphrase: Option<String>,
     pub decrypt_file: Option<std::path::PathBuf>,
     pub decrypt_output: Option<std::path::PathBuf>,
+    // Fase 1: dry-run preview tanpa network I/O
+    pub dry_run: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -211,6 +213,7 @@ mod tests {
             encrypt_passphrase: None,
             decrypt_file: None,
             decrypt_output: None,
+            dry_run: false,
         }
     }
 

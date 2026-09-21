@@ -1,1 +1,37 @@
 /target
+/target.old/
+target/
+
+# Rust artifacts
+**/*.rs.bk
+Cargo.lock.bak
+
+# Encrypted outputs and session state
+*.enc
+*.log
+session*.json
+resume*.json
+veltrix-session*.json
+
+# Local wordlists and sensitive data (never commit real creds)
+wordlists/custom*
+wordlists/*.generated.txt
+*password*.generated.txt
+secret*.txt
+real-creds*.txt
+combos-real*.txt
+
+# Stray lab files
+kali.py
+pass.txt
+user.txt
+
+# OS and editor
+.DS_Store
+.vscode/settings.json
+*.swp
+*.swo
+*~
+
+# Cache
+~/.cache/veltrix/

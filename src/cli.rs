@@ -215,7 +215,7 @@ pub struct CreateArgs {
 #[derive(Parser, Debug)]
 #[command(
     name = "veltrix",
-    version = "1.2.0",
+    version = env!("CARGO_PKG_VERSION"),
     about = "\
 VELTRIX v1.2 - Multi-Protocol Brute Force Toolkit - By AniipID
 
@@ -417,6 +417,9 @@ pub struct Cli {
     // ── Verbose ──
     #[arg(short = 'v', long = "verbose", action = clap::ArgAction::Count, help = "Verbose level 1 (-v) or verbose level 2 (-vv)", global = true)]
     pub verbose: u8,
+
+    #[arg(long = "dry-run", help = "Show attack plan without sending any network traffic", global = true)]
+    pub dry_run: bool,
 }
 
 impl Cli {
@@ -482,6 +485,7 @@ impl Cli {
             encrypt_passphrase: self.encrypt_passphrase.clone(),
             decrypt_file: self.decrypt_file.clone(),
             decrypt_output: self.decrypt_output.clone(),
+            dry_run: self.dry_run,
         }
     }
 }
@@ -519,14 +523,18 @@ pub fn port_to_protocol(port: u16) -> Option<&'static str> {
 }
 
 pub fn print_banner() {
-    let banner = r#"
+    let version = env!("CARGO_PKG_VERSION");
+    let banner = format!(
+        r#"
 ╔══════════════════════════════════════════════════════╗
-║                  VELTRIX v1.2                        ║
+║                  VELTRIX v{}                        ║
 ║           Multi-Protocol Brute Force Toolkit         ║
 ║            47 protocols · optimized · fast           ║
 ║                   By AniipID                         ║
 ╚══════════════════════════════════════════════════════╝
-    "#;
+    "#,
+        version
+    );
     println!("{}", banner.yellow());
     println!("{}", "\u{26a0}  WARNING: Authorized testing only. Unauthorized use is ILLEGAL.".red().bold());
     println!();

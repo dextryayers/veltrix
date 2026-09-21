@@ -10,7 +10,10 @@ use tokio::sync::{Semaphore, mpsc};
 use super::cidr::expand_targets;
 use super::config::AttackConfig;
 use super::credential::Credential;
+use super::credential_stream::{CredentialStream, ExpandMode};
 use super::error::AttackError;
+use super::metrics::AttackMetrics;
+use super::planner::AttackPlan;
 use super::result::{AttackSummary, AuthResult};
 use super::rules::{apply_rules, load_rules};
 use super::target::{parse_targets, Target};
@@ -273,9 +276,80 @@ impl AttackOrchestrator {
         proxies
     }
 
+    pub async fn dry_run_preview(config: &AttackConfig) -> Result<AttackPlan, AttackError> {
+        config.validate()?;
+        // Estimasi target tanpa DNS: expand CIDR/range + parse + dedup.
+        let mut target_strings: Vec<String> = Vec::new();
+        if let Some(ref fp) = config.target_file {
+            if let Ok(lines) = super::wordlist::load_wordlist_mmap(fp) {
+                target_strings.extend(lines);
+            }
+        }
+        let mut expanded_count = 0usize;
+        for spec in &config.targets {
+            expanded_count += expand_targets(&[spec.clone()]).len().max(1);
+        }
+        let file_targets = if config.target_file.is_some() {
+            target_strings.len()
+        } else {
+            0
+        };
+        let target_estimate = (expanded_count + file_targets).max(1);
+
+        // Estimasi kredensial tanpa mutasi penuh: hitung baris file + direct.
+        let mut user_count = config.users.len() as u64;
+        if let Some(ref fp) = config.user_file {
+            user_count += count_lines_fast(fp).unwrap_or(0);
+        }
+        let mut pass_count = config.passwords.len() as u64;
+        if let Some(ref fp) = config.password_file {
+            pass_count += count_lines_fast(fp).unwrap_or(0);
+        }
+        let cred_estimate = if let Some(ref fp) = config.combo_file {
+            count_lines_fast(fp).unwrap_or(0).max(1)
+        } else if config.single_user_mode {
+            pass_count.max(1)
+        } else if config.user_file.is_none() && config.password_file.is_none() {
+            // Path cepat tanpa file: pakai lazy stream agar konsisten dengan runtime.
+            CredentialStream::new(
+                config.users.clone(),
+                config.passwords.clone(),
+                expand_mode_for(config),
+            )
+            .estimate_total()
+            .max(1)
+        } else {
+            user_count.max(1) * pass_count.max(1)
+        };
+
+        Ok(AttackPlan::new(
+            target_estimate,
+            cred_estimate,
+            config.threads,
+            config.timeout,
+            config.rate_limit,
+        ))
+    }
+
     pub async fn run(&mut self) -> AttackSummary {
         let protocol_name = self.config.protocols.first().map(|s| s.as_str()).unwrap_or("unknown");
         let start_time = Utc::now();
+
+        // Fase 1: dry-run keluar sebelum network I/O apapun.
+        if self.config.dry_run {
+            match Self::dry_run_preview(&self.config).await {
+                Ok(plan) => {
+                    println!();
+                    println!("  {} dry run, no packets sent", "DRY RUN:".bold().yellow());
+                    println!("{}", plan.render());
+                    println!();
+                }
+                Err(e) => {
+                    log::error!("Dry run failed: {}", e);
+                }
+            }
+            return empty_summary(start_time);
+        }
 
         let targets = match Self::load_targets(&self.config).await {
             Ok(mut t) => {
@@ -370,16 +444,22 @@ impl AttackOrchestrator {
         let mut errors_global = 0u64;
         let mut last_prompted_count = 0u64;
 
-        // ── Always-on anti-duplicate: track tested pairs in memory ──
-        let mut tested_creds: DedupSet<(String, String)> = DedupSet::with_capacity(self.credentials.len());
+        // ── Always-on anti-duplicate: hashed, hemat memori untuk jutaan pasangan ──
+        let mut tested_creds = crate::utils::fx_map::HashedPairDedup::with_capacity(
+            self.credentials.len().min(1_000_000),
+        );
         if let Some(ref session) = self.session {
             for c in &self.credentials {
                 if session.is_tested(&c.username, &c.password) {
-                    tested_creds.insert((c.username.clone(), c.password.clone()));
+                    tested_creds.insert_hash(super::wordlist::hash_credential_pair(
+                        &c.username,
+                        &c.password,
+                    ));
                 }
             }
         }
         let mut stop_early = false;
+        let mut metrics = AttackMetrics::new();
 
         fn ordinal(n: u64) -> String {
             match n {
@@ -405,11 +485,26 @@ impl AttackOrchestrator {
             successes_global: &mut u64,
             failures_global: &mut u64,
             errors_global: &mut u64,
+            metrics: &mut AttackMetrics,
         ) -> bool {
             let mut found_success = false;
             loop {
                 match result_rx.try_recv() {
                     Ok(result) => {
+                        let timeout = result
+                            .error
+                            .as_deref()
+                            .map(|e| {
+                                let l = e.to_lowercase();
+                                l.contains("timeout") || l.contains("timed out")
+                            })
+                            .unwrap_or(false);
+                        metrics.record_attempt(
+                            result.duration_ms,
+                            result.success,
+                            timeout,
+                            result.error.is_some() && !result.success,
+                        );
                         if result.success {
                             *successes_global += 1;
                             found_success = true;
@@ -501,7 +596,21 @@ impl AttackOrchestrator {
             true
         }
 
-        const BATCH: usize = 256;
+        let plan = AttackPlan::new(
+            self.targets.len(),
+            self.credentials.len() as u64,
+            self.config.threads,
+            self.config.timeout,
+            self.config.rate_limit,
+        );
+        let mut batch_size = plan.batch_size;
+        log::info!(
+            "Plan: {} targets x {} creds, mode {:?}, start batch {}",
+            plan.targets,
+            plan.credentials,
+            expand_mode_for(&self.config),
+            batch_size
+        );
         let mut batch_submitted = 0usize;
         let mut status_counter = 0usize;
 
@@ -517,13 +626,17 @@ impl AttackOrchestrator {
                 }
 
                 let credential = &arc_credentials[c_idx];
-                // Always-on anti-duplicate
-                if tested_creds.contains(&(credential.username.clone(), credential.password.clone())) {
+                // Always-on anti-duplicate via hash
+                let h = super::wordlist::hash_credential_pair(
+                    &credential.username,
+                    &credential.password,
+                );
+                if tested_creds.contains_hash(h) {
                     attempt_count += 1;
                     self.output.inc_progress();
                     continue;
                 }
-                tested_creds.insert((credential.username.clone(), credential.password.clone()));
+                tested_creds.insert_hash(h);
 
                 self.rate_limiter.wait_if_needed().await;
                 self.jitter.delay().await;
@@ -544,14 +657,26 @@ impl AttackOrchestrator {
                 self.output.inc_progress();
                 batch_submitted += 1;
 
-                if batch_submitted >= BATCH {
+                if batch_submitted >= batch_size {
                     let found = drain_results(
                         &mut result_rx, &mut self.output, &mut self.results,
                         &mut self.session,
                         &mut successes_global, &mut failures_global,
                         &mut errors_global,
+                        &mut metrics,
                     );
                     batch_submitted = 0;
+                    // Fase 1: batch adaptif berdasarkan timeout ratio.
+                    let tuned = metrics.suggested_batch(batch_size);
+                    if tuned != batch_size {
+                        log::info!(
+                            "Adaptive batch {} -> {} ({})",
+                            batch_size,
+                            tuned,
+                            metrics.summary_line()
+                        );
+                        batch_size = tuned;
+                    }
                     if found && !check_and_prompt(
                         &mut stop_early, successes_global,
                         &mut last_prompted_count,
@@ -570,6 +695,7 @@ impl AttackOrchestrator {
                     &mut self.session,
                     &mut successes_global, &mut failures_global,
                     &mut errors_global,
+                    &mut metrics,
                 );
                 batch_submitted = 0;
                 if found && !check_and_prompt(
@@ -603,7 +729,9 @@ impl AttackOrchestrator {
                 &mut self.session,
                 &mut successes_global, &mut failures_global,
                 &mut errors_global,
+                &mut metrics,
             );
+            log::info!("Final metrics: {}", metrics.summary_line());
         }
 
         if let Some(ref session) = self.session {
@@ -690,4 +818,28 @@ fn build_credentials(config: &AttackConfig, users: &[String], passwords: &[Strin
 
 fn truncate_password(s: &str, max_len: usize) -> String {
     if s.len() > max_len { s.chars().take(max_len).collect() } else { s.to_string() }
+}
+
+fn count_lines_fast(path: &std::path::Path) -> Result<u64, AttackError> {
+    // Coba mmap dulu untuk kecepatan, fallback ke buffered read.
+    if let Ok(lines) = super::wordlist::load_wordlist_mmap(path) {
+        return Ok(lines.len() as u64);
+    }
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| AttackError::wordlist(path.to_path_buf(), e.to_string()))?;
+    Ok(content
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .count() as u64)
+}
+
+fn expand_mode_for(config: &AttackConfig) -> ExpandMode {
+    if config.spray_mode {
+        ExpandMode::Spray
+    } else if config.single_user_mode {
+        ExpandMode::SingleUser
+    } else {
+        ExpandMode::Cartesian
+    }
 }

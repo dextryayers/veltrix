@@ -30,6 +30,42 @@ impl<T: Hash + Eq> DedupSet<T> {
     pub fn clear(&mut self) { self.inner.clear(); }
 
     pub fn into_inner(self) -> FastSet<T> { self.inner }
+
+    /// Kapasitas dibatasi agar tidak OOM untuk input raksasa.
+    /// Jika estimasi melebihi budget, pakai budget sebagai cap awal.
+    /// Set tetap bisa tumbuh, tapi alokasi awal tidak meledak.
+    pub fn with_budget(estimated: usize, budget: usize) -> Self {
+        Self::with_capacity(estimated.min(budget))
+    }
+}
+
+/// Dedup hemat memori untuk pasangan (user, pass) berbasis hash u64.
+/// Menyimpan 8 byte per entri dibanding dua String penuh.
+/// Cocok untuk jutaan kombinasi. Risiko tabrakan hash praktis dapat diabaikan
+/// untuk audit, dan jauh lebih baik daripada OOM.
+pub struct HashedPairDedup {
+    inner: FastSet<u64>,
+}
+
+impl HashedPairDedup {
+    pub fn new() -> Self {
+        Self { inner: FastSet::default() }
+    }
+
+    pub fn with_capacity(cap: usize) -> Self {
+        Self { inner: FastSet::with_capacity_and_hasher(cap, Default::default()) }
+    }
+
+    pub fn insert_hash(&mut self, h: u64) -> bool {
+        self.inner.insert(h)
+    }
+
+    pub fn contains_hash(&self, h: u64) -> bool {
+        self.inner.contains(&h)
+    }
+
+    pub fn len(&self) -> usize { self.inner.len() }
+    pub fn is_empty(&self) -> bool { self.inner.is_empty() }
 }
 
 pub struct FastCounter<T: Hash + Eq> {

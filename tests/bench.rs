@@ -52,3 +52,47 @@ fn bench_hashset_insert() {
     let elapsed = start.elapsed();
     println!("HashSet insert: {} items in {:?} ({:?} each)", iterations, elapsed, elapsed / iterations);
 }
+
+#[test]
+fn bench_cartesian_lazy_vs_vec() {
+    let start = Instant::now();
+    let users = 1_000;
+    let passwords = 1_000;
+    let mut count = 0u64;
+    for u in 0..users {
+        for p in 0..passwords {
+            count += ((u ^ p) & 1) as u64;
+        }
+    }
+    let elapsed = start.elapsed();
+    println!("Lazy cartesian 1M combos: count={} in {:?}", count, elapsed);
+}
+
+#[test]
+fn bench_dedup_fxhash() {
+    use std::collections::HashSet;
+    let start = Instant::now();
+    let iterations = 100_000;
+    let mut set: HashSet<String> = HashSet::with_capacity(iterations);
+    for i in 0..iterations {
+        set.insert(format!("user{}:pass{}", i % 50_000, i));
+    }
+    let elapsed = start.elapsed();
+    println!("Dedup 100k with 50k dup keys: {} unique in {:?}", set.len(), elapsed);
+}
+
+#[test]
+fn bench_combo_line_parse() {
+    let start = Instant::now();
+    let iterations = 100_000;
+    let mut valid = 0;
+    for i in 0..iterations {
+        let line = format!("user{}:pass:word{}", i, i);
+        let parts: Vec<&str> = line.splitn(2, ':').collect();
+        if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {
+            valid += 1;
+        }
+    }
+    let elapsed = start.elapsed();
+    println!("Combo parse: {} valid in {:?}", valid, elapsed);
+}

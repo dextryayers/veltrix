@@ -148,6 +148,68 @@ impl StreamingComboList {
     pub fn is_exhausted(&self) -> bool { self.exhausted }
 }
 
+pub fn hash_credential_pair(user: &str, pass: &str) -> u64 {
+    // Hash 64-bit hemat memori untuk dedup jutaan pasangan.
+    // Memakai FxHash yang sudah jadi dependency proyek.
+    use std::hash::Hasher;
+    let mut h = fxhash::FxHasher::default();
+    h.write(user.as_bytes());
+    h.write_u8(0xff);
+    h.write(pass.as_bytes());
+    h.finish()
+}
+
+/// Loader hemat memori via mmap untuk wordlist besar.
+/// Fallback otomatis ke buffered read jika mmap gagal.
+pub fn load_wordlist_mmap(path: &Path) -> Result<Vec<String>, AttackError> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| AttackError::wordlist(path.to_path_buf(), e.to_string()))?;
+    let meta = file
+        .metadata()
+        .map_err(|e| AttackError::wordlist(path.to_path_buf(), e.to_string()))?;
+    // File kecil tidak perlu mmap.
+    if meta.len() < 64 * 1024 {
+        return load_wordlist_blocking(path);
+    }
+    let mmap = unsafe {
+        memmap2::Mmap::map(&file)
+            .map_err(|e| AttackError::wordlist(path.to_path_buf(), e.to_string()))?
+    };
+    let mut out = Vec::new();
+    // Estimasi kasar: 1 baris per ~16 byte, hindari realloc berulang.
+    out.reserve((mmap.len() / 16).min(1_000_000));
+    for line in mmap.split(|b| *b == b'\n') {
+        // Skip cepat untuk baris kosong dan komentar.
+        if line.is_empty() || line[0] == b'#' {
+            continue;
+        }
+        // Trim \r dan spasi tanpa alokasi ganda jika memungkinkan.
+        let s = String::from_utf8_lossy(line);
+        let t = s.trim();
+        if !t.is_empty() && !t.starts_with('#') {
+            out.push(t.to_string());
+        }
+    }
+    log::info!("Loaded {} lines via mmap from {}", out.len(), path.display());
+    Ok(out)
+}
+
+fn load_wordlist_blocking(path: &Path) -> Result<Vec<String>, AttackError> {
+    use std::io::BufRead;
+    let file = std::fs::File::open(path)
+        .map_err(|e| AttackError::wordlist(path.to_path_buf(), e.to_string()))?;
+    let reader = std::io::BufReader::new(file);
+    let mut out = Vec::new();
+    for line in reader.lines() {
+        let line = line.map_err(|e| AttackError::wordlist(path.to_path_buf(), e.to_string()))?;
+        let t = line.trim();
+        if !t.is_empty() && !t.starts_with('#') {
+            out.push(t.to_string());
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

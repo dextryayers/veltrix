@@ -180,6 +180,19 @@ impl WorkerPool {
         self.total_submitted.load(Ordering::Relaxed)
     }
 
+    /// Jumlah task yang masih berjalan di JoinSet. Dipakai untuk observability adaptif.
+    pub fn inflight(&self) -> usize {
+        self.tasks.len()
+    }
+
+    pub fn skipped_count(&self) -> usize {
+        self.skipped_users.len()
+    }
+
+    pub fn proxy_failure_counts(&self) -> Vec<u64> {
+        self.proxy_failures.iter().map(|c| c.load(Ordering::Relaxed)).collect()
+    }
+
     pub async fn wait_complete(&mut self) {
         while self.tasks.join_next().await.is_some() {}
     }
