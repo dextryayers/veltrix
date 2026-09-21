@@ -251,6 +251,31 @@ impl LiveDashboard {
         self.status_bar.finish_and_clear();
     }
 
+    /// F4.7: catat sinyal lockout / rate-limit agar operator sadar sejak awal,
+    /// bukan hanya di ringkasan akhir.
+    pub fn note_signal(&mut self, category: &crate::utils::patterns::ResponseCategory) {
+        use crate::utils::patterns::ResponseCategory::*;
+        match category {
+            AccountLocked => {
+                self.lockout_count += 1;
+                if self.lockout_count == 1 {
+                    let msg = "LOCKOUT signal detected - tripping account protection. Consider --spray, lower threads, or higher delay.";
+                    log::warn!("{}", msg);
+                    self.set_status(msg.to_string());
+                }
+            }
+            RateLimited => {
+                self.rate_limit_count += 1;
+                if self.rate_limit_count == 1 {
+                    let msg = "RATE-LIMIT signal detected - target is throttling. Cooldown engaged.";
+                    log::warn!("{}", msg);
+                    self.set_status(msg.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn println_stdout(&self, msg: String) {
         let _ = self._multi.println(msg);
     }
@@ -518,6 +543,13 @@ impl OutputHandler {
         }
     }
 
+    /// F4.7: passthrough sinyal klasifikasi ke dashboard (jika ada).
+    pub fn note_signal(&mut self, category: &crate::utils::patterns::ResponseCategory) {
+        if let Some(ref mut d) = self.dashboard {
+            d.note_signal(category);
+        }
+    }
+
     pub fn set_status(&self, msg: String) {
         if let Some(ref d) = self.dashboard {
             d.set_status(msg);
@@ -553,13 +585,21 @@ impl OutputHandler {
         lines.push(("Successes".into(), summary.successes.to_string()));
         lines.push(("Failures".into(), summary.failures.to_string()));
         lines.push(("Errors".into(), summary.errors.to_string()));
+        if let Some(ref d) = self.dashboard {
+            if d.lockout_count > 0 {
+                lines.push(("Lockouts".into(), d.lockout_count.to_string()));
+            }
+            if d.rate_limit_count > 0 {
+                lines.push(("Rate Limit".into(), d.rate_limit_count.to_string()));
+            }
+        }
 
         let max_label = lines.iter().map(|(l, _)| l.len()).max().unwrap_or(10);
         for (label, value) in &lines {
             let color = match label.as_str() {
                 "Successes" => Color::Green,
                 "Failures" => Color::Red,
-                "Errors" => Color::Yellow,
+                "Errors" | "Lockouts" | "Rate Limit" => Color::Yellow,
                 _ => Color::White,
             };
             println!("  {:>width$}  {}",

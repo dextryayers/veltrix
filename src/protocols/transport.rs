@@ -7,6 +7,8 @@
 //! Semua protokol baru WAJIB memakai helper ini. Protokol lama dimigrasi
 //! bertahap mulai dari 8 inti: ssh, ftp, smtp, mysql, smb, rdp, postgres, redis.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::net::TcpStream;
 
@@ -55,6 +57,9 @@ pub async fn connect_and_banner(
 /// Bangun reqwest client dengan proxy yang benar + warning chain.
 /// F3.3: chain multi-hop TIDAK didukung reqwest (single-hop only).
 /// Fungsi ini memakai hop pertama dan mengembalikan warning agar operator sadar.
+///
+/// F4.4: stealth pack selalu aktif - cookie store, header Accept/Accept-Language
+/// standar, dan UA dari pool rotasi (atau override --user-agent).
 pub fn build_reqwest_client(
     timeout_dur: Duration,
     proxy: &Option<ProxyConfig>,
@@ -64,7 +69,9 @@ pub fn build_reqwest_client(
         .timeout(timeout_dur)
         .danger_accept_invalid_certs(true)
         .user_agent(user_agent.to_string())
-        .redirect(reqwest::redirect::Policy::limited(5));
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .cookie_store(true)
+        .default_headers(stealth_headers());
 
     let mut warning = None;
     if let Some(pc) = proxy {
@@ -84,6 +91,51 @@ pub fn build_reqwest_client(
 
     let client = builder.build().map_err(|e| format!("Client error: {}", e));
     (client, warning)
+}
+
+/// F4.4: pool User-Agent realistis. Rotasi round-robin per attempt agar tidak
+/// monoton satu UA untuk ribuan request. Override --user-agent selalu menang.
+pub const USER_AGENTS: &[&str] = &[
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:127.0) Gecko/20100101 Firefox/127.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+];
+
+static UA_COUNTER: AtomicU64 = AtomicU64::new(0);
+static UA_OVERRIDE: OnceLock<String> = OnceLock::new();
+
+/// Set override global sekali per proses (first-wins, konsisten dengan
+/// globals http lain seperti form field). Dipanggil dari AttackOrchestrator.
+pub fn set_user_agent_override(ua: Option<String>) {
+    if let Some(u) = ua {
+        if !u.trim().is_empty() {
+            let _ = UA_OVERRIDE.set(u);
+        }
+    }
+}
+
+/// UA deterministik untuk index n. Murni dan unit-testable.
+pub fn user_agent_for_index(n: u64) -> &'static str {
+    USER_AGENTS[(n as usize) % USER_AGENTS.len()]
+}
+
+/// UA untuk attempt berikutnya: override jika ada, else rotasi pool.
+pub fn next_user_agent() -> String {
+    if let Some(o) = UA_OVERRIDE.get() {
+        return o.clone();
+    }
+    user_agent_for_index(UA_COUNTER.fetch_add(1, Ordering::Relaxed)).to_string()
+}
+
+fn stealth_headers() -> reqwest::header::HeaderMap {
+    use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_LANGUAGE};
+    let mut h = HeaderMap::new();
+    h.insert(ACCEPT, HeaderValue::from_static("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"));
+    h.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.9"));
+    h
 }
 
 /// Validasi fingerprint sederhana untuk eliminasi false positive.
@@ -213,5 +265,29 @@ mod tests {
             fp.check(false, "Access denied for user"),
             FingerprintVerdict::ConsistentFail
         );
+    }
+
+    #[test]
+    fn ua_pool_rotation_deterministic() {
+        assert_eq!(user_agent_for_index(0), USER_AGENTS[0]);
+        assert_eq!(user_agent_for_index(6), USER_AGENTS[0]);
+        assert_eq!(user_agent_for_index(7), USER_AGENTS[1]);
+        assert!(USER_AGENTS.len() >= 4);
+        for ua in USER_AGENTS {
+            assert!(ua.starts_with("Mozilla/5.0"));
+        }
+    }
+
+    #[test]
+    fn ua_next_comes_from_pool() {
+        let ua = next_user_agent();
+        assert!(USER_AGENTS.contains(&ua.as_str()) || UA_OVERRIDE.get().is_some());
+    }
+
+    #[test]
+    fn stealth_headers_present() {
+        let h = stealth_headers();
+        assert!(h.contains_key(reqwest::header::ACCEPT));
+        assert!(h.contains_key(reqwest::header::ACCEPT_LANGUAGE));
     }
 }

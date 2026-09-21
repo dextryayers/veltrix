@@ -21,7 +21,7 @@ use super::wordlist::{load_combo_list, load_wordlist};
 use super::worker::{WorkerPool, WorkerTask};
 use crate::proxy::{load_proxy_list, ProxyConfig};
 use crate::utils::output::OutputHandler;
-use crate::utils::ratelimit::{JitterDelay, RateLimiter};
+use crate::utils::ratelimit::{JitterDelay, KeyedThrottle, RateLimiter, SprayCadence};
 use crate::utils::report::save_html_report;
 use crate::protocols::{http, rdp};
 use crate::utils::resume::SessionState;
@@ -36,6 +36,10 @@ pub struct AttackOrchestrator {
     output: OutputHandler,
     rate_limiter: RateLimiter,
     jitter: JitterDelay,
+    // F4.1/F4.2: limiter per-target, per-user, dan cadence spray round.
+    target_throttle: KeyedThrottle,
+    user_throttle: KeyedThrottle,
+    spray_cadence: SprayCadence,
     running: Arc<AtomicBool>,
 }
 
@@ -61,6 +65,17 @@ impl AttackOrchestrator {
         if let Some(ref v) = config.http_success {
             http::set_form_success(v);
         }
+        // F4.4: override UA global (first-wins per proses, sama seperti globals http lain).
+        crate::protocols::transport::set_user_agent_override(config.user_agent.clone());
+
+        // F4.1: throttle per-target dari --target-rate-limit (min interval),
+        // per-user dari --user-cooldown.
+        let target_throttle = match config.target_rate_limit {
+            Some(n) if n > 0 => KeyedThrottle::new(std::time::Duration::from_secs_f64(1.0 / n as f64)),
+            _ => KeyedThrottle::disabled(),
+        };
+        let user_throttle = KeyedThrottle::new(config.user_cooldown);
+        let spray_cadence = SprayCadence::new(config.spray_interval, config.spray_jitter_pct);
 
         Ok(AttackOrchestrator {
             targets: Vec::new(),
@@ -71,6 +86,9 @@ impl AttackOrchestrator {
             output,
             rate_limiter: RateLimiter::new(config.rate_limit),
             jitter: JitterDelay::new(config.delay, 100),
+            target_throttle,
+            user_throttle,
+            spray_cadence,
             config,
             running,
         })
@@ -383,6 +401,34 @@ impl AttackOrchestrator {
         };
         self.targets = targets;
 
+        // F5.3: batasi ke port terbuka dari file hasil scan terakhir.
+        if let Some(ref open_path) = self.config.only_open {
+            match load_only_open(open_path) {
+                Ok(open) => {
+                    let before = self.targets.len();
+                    self.targets
+                        .retain(|t| open.contains(&(t.host.clone(), t.port)));
+                    let dropped = before - self.targets.len();
+                    log::info!(
+                        "only-open: {} targets kept, {} dropped (not in {})",
+                        self.targets.len(),
+                        dropped,
+                        open_path.display()
+                    );
+                    if self.targets.is_empty() {
+                        log::error!(
+                            "only-open filtered out all targets; nothing to attack."
+                        );
+                        return empty_summary(start_time);
+                    }
+                }
+                Err(e) => {
+                    log::error!("Failed to load --only-open file: {}", e);
+                    return empty_summary(start_time);
+                }
+            }
+        }
+
         let credentials = match Self::load_credentials(&self.config).await {
             Ok(c) => c,
             Err(e) => {
@@ -504,6 +550,13 @@ impl AttackOrchestrator {
                             timeout,
                             result.error.is_some() && !result.success,
                         );
+                        // F4.7: teruskan sinyal lockout/rate-limit ke dashboard live.
+                        let cat = crate::utils::patterns::classify_error(
+                            result.error.as_deref(),
+                            result.success,
+                        )
+                        .category;
+                        output.note_signal(&cat);
                         if result.success {
                             *successes_global += 1;
                             found_success = true;
@@ -617,6 +670,20 @@ impl AttackOrchestrator {
         let arc_targets: Vec<Arc<Target>> = self.targets.iter().map(|t| Arc::new(t.clone())).collect();
         let arc_credentials: Vec<Arc<Credential>> = self.credentials.iter().map(|c| Arc::new(c.clone())).collect();
 
+        // F4.2: satu spray round = tiap user dicoba sekali untuk satu password,
+        // di semua target. Tidur cadence setiap round selesai.
+        let spray_round_size: usize = if self.config.spray_mode && self.spray_cadence.is_enabled() {
+            let mut users = std::collections::HashSet::new();
+            for c in &self.credentials {
+                users.insert(c.username.as_str());
+            }
+            users.len().saturating_mul(target_count).max(1)
+        } else {
+            0
+        };
+        let mut spray_submitted: usize = 0;
+        let mut spray_round: u64 = 0;
+
         'outer: for t_idx in 0..target_count {
             let target = &arc_targets[t_idx];
             for c_idx in 0..cred_count {
@@ -639,6 +706,11 @@ impl AttackOrchestrator {
 
                 self.rate_limiter.wait_if_needed().await;
                 self.jitter.delay().await;
+                // F4.1: limiter per-target dan per-user di atas limiter global.
+                self.target_throttle
+                    .wait(&format!("{}:{}", target.host, target.port))
+                    .await;
+                self.user_throttle.wait(&credential.username).await;
 
                 if status_counter & 3 == 0 {
                     self.output.set_status(format!("{}:{} -> {}:{}",
@@ -655,6 +727,15 @@ impl AttackOrchestrator {
                 attempt_count += 1;
                 self.output.inc_progress();
                 batch_submitted += 1;
+
+                // F4.2: jeda antar spray round agar tidak menekan satu akun bertubi-tubi.
+                if spray_round_size > 0 {
+                    spray_submitted += 1;
+                    if spray_submitted % spray_round_size == 0 {
+                        spray_round += 1;
+                        self.spray_cadence.wait_round(spray_round).await;
+                    }
+                }
 
                 if batch_submitted >= batch_size {
                     let found = drain_results(
@@ -841,4 +922,48 @@ fn expand_mode_for(config: &AttackConfig) -> ExpandMode {
     } else {
         ExpandMode::Cartesian
     }
+}
+
+/// F5.3: parse file hasil `scan-ports -o`.
+/// Format utama TSV `host<TAB>port<TAB>service...` (hanya port terbuka yang
+/// ditulis scanner), plus header "Veltrix Scan Results". Toleran terhadap
+/// baris `host:port` polos.
+pub fn load_only_open(
+    path: &std::path::Path,
+) -> Result<std::collections::HashSet<(String, u16)>, AttackError> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| AttackError::io("only-open", format!("cannot read {}: {}", path.display(), e)))?;
+    let mut out = std::collections::HashSet::new();
+    for raw in content.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with("Veltrix") || line.starts_with("===") {
+            continue;
+        }
+        // Coba TSV/whitespace dulu: host port ...
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 2 {
+            if let Ok(port) = parts[1].trim_matches(|c| c == ':' || c == ',').parse::<u16>() {
+                if port > 0 {
+                    out.insert((parts[0].to_string(), port));
+                    continue;
+                }
+            }
+        }
+        // Fallback host:port.
+        if let Some(pos) = line.rfind(':') {
+            if let Ok(port) = line[pos + 1..].trim().parse::<u16>() {
+                let host = line[..pos].trim().trim_matches(|c| c == '[' || c == ']');
+                if !host.is_empty() && port > 0 {
+                    out.insert((host.to_string(), port));
+                }
+            }
+        }
+    }
+    if out.is_empty() {
+        return Err(AttackError::config(format!(
+            "no open host:port entries parsed from {}",
+            path.display()
+        )));
+    }
+    Ok(out)
 }
