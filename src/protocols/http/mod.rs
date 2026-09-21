@@ -8,6 +8,7 @@ use crate::core::result::AuthResult;
 use crate::core::target::Target;
 use crate::proxy::ProxyConfig;
 use super::Protocol;
+use super::transport;
 
 static HTTP_USERFIELD: OnceLock<String> = OnceLock::new();
 static HTTP_PASSFIELD: OnceLock<String> = OnceLock::new();
@@ -18,19 +19,15 @@ pub fn set_form_passfield(val: &str) { let _ = HTTP_PASSFIELD.set(val.to_string(
 pub fn set_form_success(val: &str) { let _ = HTTP_SUCCESS.set(val.to_string()); }
 
 fn build_client(timeout_dur: Duration, proxy: &Option<ProxyConfig>) -> Result<reqwest::Client, String> {
-    let mut builder = reqwest::Client::builder()
-        .timeout(timeout_dur)
-        .danger_accept_invalid_certs(true)
-        .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36")
-        .redirect(reqwest::redirect::Policy::limited(5));
-
-    if let Some(proxy_config) = proxy {
-        if let Some(p) = proxy_config.to_reqwest_proxy() {
-            builder = builder.proxy(p);
-        }
+    let (client, warning) = transport::build_reqwest_client(
+        timeout_dur,
+        proxy,
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+    );
+    if let Some(w) = warning {
+        log::warn!("{}", w);
     }
-
-    builder.build().map_err(|e| format!("Client error: {}", e))
+    client
 }
 
 fn is_success_status(status: u16) -> bool {

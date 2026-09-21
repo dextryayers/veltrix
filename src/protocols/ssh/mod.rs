@@ -8,7 +8,7 @@ use crate::core::result::AuthResult;
 use crate::core::target::Target;
 use crate::proxy::ProxyConfig;
 use super::Protocol;
-use super::tcp::{connect_optimized, tune_tcp};
+use super::transport;
 
 pub struct SshProtocol;
 
@@ -47,15 +47,8 @@ impl Protocol for SshProtocol {
         let addr = target.addr_string();
 
         let stream = match timeout(timeout_dur, async {
-            match proxy {
-                Some(p) => {
-                    let s = p.tcp_connect(&addr, timeout_dur).await
-                        .map_err(|e| format!("Proxy connect: {}", e))?;
-                    tune_tcp(&s);
-                    Ok(s)
-                },
-                None => connect_optimized(&addr, timeout_dur).await,
-            }
+            transport::tcp_connect(&addr, timeout_dur, proxy).await
+                .map_err(|e| format!("Transport connect: {}", e))
         }).await {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => return AuthResult::new(

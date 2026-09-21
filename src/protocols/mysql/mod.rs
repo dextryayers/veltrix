@@ -12,7 +12,7 @@ use crate::core::result::AuthResult;
 use crate::core::target::Target;
 use crate::proxy::ProxyConfig;
 use super::Protocol;
-use super::tcp::{connect_optimized, tune_tcp};
+use super::transport;
 
 pub struct MySqlProtocol;
 
@@ -75,15 +75,7 @@ impl Protocol for MySqlProtocol {
         let addr = target.addr_string();
 
         let connect_result = match timeout(timeout_dur, async {
-            let mut stream = match proxy {
-                Some(p) => {
-                    let s = p.tcp_connect(&addr, timeout_dur).await
-                        .map_err(|e| format!("Proxy connect: {}", e))?;
-                    tune_tcp(&s);
-                    s
-                },
-                None => connect_optimized(&addr, timeout_dur).await?,
-            };
+            let mut stream = transport::tcp_connect(&addr, timeout_dur, proxy).await?;
 
             let payload = packet::read_packet(&mut stream).await?;
 

@@ -22,18 +22,15 @@ fn global_client() -> &'static reqwest::Client {
 }
 
 fn build_client_with_proxy(proxy: &ProxyConfig, timeout: Duration) -> Result<reqwest::Client, String> {
-    let mut builder = reqwest::Client::builder()
-        .timeout(timeout)
-        .danger_accept_invalid_certs(true)
-        .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36")
-        .redirect(reqwest::redirect::Policy::limited(3))
-        .pool_idle_timeout(Duration::from_secs(30))
-        .pool_max_idle_per_host(256)
-        .tcp_keepalive(Duration::from_secs(15));
-    if let Some(p) = proxy.to_reqwest_proxy() {
-        builder = builder.proxy(p);
+    let (client, warning) = super::transport::build_reqwest_client(
+        timeout,
+        &Some(proxy.clone()),
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+    );
+    if let Some(w) = warning {
+        log::warn!("{}", w);
     }
-    builder.build().map_err(|e| format!("Client: {}", e))
+    client
 }
 
 pub async fn http_basic_auth(

@@ -493,6 +493,7 @@ fn run_validate(args: &cli::ValidateArgs) {
 
 fn default_cli_for_validate() -> Cli {
     Cli {
+        command: None,
         targets: vec![],
         target_file: None,
         ports: vec![],

@@ -49,6 +49,7 @@ pub mod rlogin;
 pub mod squid;
 pub mod memcached;
 pub mod parser;
+pub mod transport;
 
 use std::collections::HashSet;
 use async_trait::async_trait;

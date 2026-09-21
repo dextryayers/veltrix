@@ -26,6 +26,7 @@ pub struct WorkerPool {
     tasks: JoinSet<()>,
     total_submitted: Arc<AtomicU64>,
     skipped_users: Arc<dashmap::DashSet<String>>,
+    fp_check: bool,
 }
 
 impl WorkerPool {
@@ -42,6 +43,7 @@ impl WorkerPool {
             tasks: JoinSet::new(),
             total_submitted: Arc::new(AtomicU64::new(0)),
             skipped_users: Arc::new(dashmap::DashSet::new()),
+            fp_check: config.fp_check,
         }
     }
 
@@ -66,6 +68,7 @@ impl WorkerPool {
         let timeout = self.timeout;
         let proxies = Arc::clone(&self.proxies);
         let proxy_fails = Arc::clone(&self.proxy_failures);
+        let fp_check = self.fp_check;
         let skipped = Arc::clone(&self.skipped_users);
         let target = task.target;
         let credential = task.credential;
@@ -124,6 +127,26 @@ impl WorkerPool {
                 );
 
                 if result.success {
+                    // F3.5 fp-check: verifikasi ulang sekali untuk eliminasi false positive.
+                    if fp_check {
+                        let verify = {
+                            let _permit = semaphore.acquire().await.unwrap();
+                            handler
+                                .authenticate(&*target, &*credential, timeout, &current_proxy)
+                                .await
+                        };
+                        if !verify.success {
+                            log::warn!(
+                                "fp-check rejected {}:{} {} (first success not reproducible)",
+                                target.host, target.port, credential.username
+                            );
+                            last_result = Some(AuthResult {
+                                error: Some("Rejected by fp-check re-verify".into()),
+                                ..result
+                            });
+                            break;
+                        }
+                    }
                     last_result = Some(result);
                     break;
                 }

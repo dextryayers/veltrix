@@ -10,7 +10,8 @@ use crate::core::result::AuthResult;
 use crate::core::target::Target;
 use crate::proxy::ProxyConfig;
 use super::Protocol;
-use super::tcp::{connect_optimized, tune_tcp, alloc_read_buf};
+use super::tcp::alloc_read_buf;
+use super::transport;
 
 async fn read_response(
     stream: &mut (impl AsyncReadExt + AsyncWriteExt + Unpin),
@@ -89,15 +90,7 @@ impl Protocol for FtpProtocol {
         let password = credential.password.clone();
 
         let result = timeout(timeout_dur, async {
-            let mut stream = match proxy {
-                Some(p) => {
-                    let s = p.tcp_connect(&addr, timeout_dur).await
-                        .map_err(|e| format!("Proxy connect: {}", e))?;
-                    tune_tcp(&s);
-                    s
-                },
-                None => connect_optimized(&addr, timeout_dur).await?,
-            };
+            let mut stream = transport::tcp_connect(&addr, timeout_dur, proxy).await?;
 
             if port == 990 {
                 let connector = TlsConnector::from(

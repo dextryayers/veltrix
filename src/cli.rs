@@ -725,6 +725,7 @@ impl Cli {
             if let Some(v) = fc.behavior.stop_on_first { config.stop_on_first = v; }
         }
     }
+}
 
 pub fn port_to_protocol(port: u16) -> Option<&'static str> {
     match port {
@@ -796,9 +797,9 @@ pub fn print_manual() {
     println!();
     let manual = r#"Original manual body follows.
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║                       VELTRIX — COMPLETE USER MANUAL                   ║
+║                       VELTRIX — COMPLETE USER MANUAL                         ║
 ║               Multi-Protocol Brute Force & Security Auditing Toolkit         ║
-║                               By AniipID                                    ║
+║                               By AniipID                                     ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
 ────────────────────────────────────────────────────────────────────────────────

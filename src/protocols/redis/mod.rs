@@ -9,8 +9,8 @@ use crate::core::credential::Credential;
 use crate::core::result::AuthResult;
 use crate::core::target::Target;
 use crate::proxy::ProxyConfig;
-use super::tcp::{connect_optimized, tune_tcp};
 use super::Protocol;
+use super::transport;
 
 pub struct RedisProtocol;
 
@@ -91,16 +91,8 @@ impl Protocol for RedisProtocol {
 
         match timeout(timeout_dur, async {
             let addr = target.addr_string();
-            let stream = match proxy {
-                Some(p) => {
-                    let s = p.tcp_connect(&addr, timeout_dur).await
-                        .map_err(|e| format!("Proxy connect: {}", e))?;
-                    tune_tcp(&s);
-                    s
-                },
-                None => connect_optimized(&addr, timeout_dur).await
-                    .map_err(|e| format!("Connect: {}", e))?,
-            };
+            let stream = transport::tcp_connect(&addr, timeout_dur, proxy).await
+                .map_err(|e| format!("Transport connect: {}", e))?;
 
             if use_tls {
                 let connector = TlsConnector::from(
