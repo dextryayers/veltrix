@@ -505,6 +505,16 @@ veltrix http -t 10.0.0.20:8080 --http-userfield username --http-passfield passwo
 | `--rate-limit N` | unlimited | Maximum attempts per second when set |
 | `--retries N` | `2` | Additional connection retries |
 | `--stop-on-first` | false | Stop target after first valid credential |
+| `--spray` | false | Spray mode: one password across all users first |
+| `--single-user` | false | Only first username tested with all passwords |
+| `--resume FILE` | none | Resume session file |
+| `--config FILE` | none | Base TOML/JSON config, CLI flags override file |
+| `--rule FILE` | none | Password mutation rule file |
+| `--max-mutations N` | `500` | Max rule mutations per password |
+| `--checkpoint N` | `100` | Session checkpoint interval |
+| `--api-bind ADDR` | none | REST API bind, local only recommended |
+| `--fp-check` | false | Re-verify successes to cut false positives |
+| `--dry-run` | false | Show plan without network traffic |
 | `-v, -vv` | off | Verbose level 1 or 2 |
 
 ### 8.5 Protocol specific options
@@ -536,7 +546,25 @@ veltrix --list-plugin
 
 # Decrypt previous encrypted output
 veltrix --decrypt result.json.enc --decrypt-output result.json
+
+# Validate config without attacking (exit 0 valid, 2 invalid)
+veltrix validate ./config/veltrix.toml
+veltrix validate ./my-run.json
+
+# Shell completion
+veltrix completion bash
+veltrix completion zsh
+veltrix completion fish
+veltrix completion powershell
+
+# Config file + CLI override + dry run
+veltrix ssh --config ./my-run.json --dry-run
+veltrix ssh -t 10.0.0.1 -U users.txt -W passwords.txt --spray --delay 1000 --dry-run
 ```
+
+Exit codes: `0` found or dry-run/validate ok, `1` no findings or runtime fail, `2` config invalid, `130` forced interrupt.
+
+See `docs/protocols-v2.md` for port defaults, TLS modes, proxy chain limits, and fingerprint notes.
 
 ---
 
