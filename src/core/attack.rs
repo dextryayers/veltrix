@@ -488,11 +488,14 @@ impl AttackOrchestrator {
         );
         println!();
 
-        self.output.init_dashboard(
-            protocol_name,
-            self.targets.len(),
-            self.credentials.len(),
-        );
+        // F6.4: job API (quiet) tidak membuat dashboard progres ke stdout server.
+        if !self.config.quiet {
+            self.output.init_dashboard(
+                protocol_name,
+                self.targets.len(),
+                self.credentials.len(),
+            );
+        }
 
         self.output.set_status(format!("Brute-forcing {} targets × {} credentials ({} total)",
             self.targets.len(), self.credentials.len(), total_combinations));

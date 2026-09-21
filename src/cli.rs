@@ -197,6 +197,12 @@ pub enum Commands {
     #[command(about = "Start REST API v2 + Web UI server (JWT auth, job queue, live progress)")]
     Serve(ServeArgs),
 
+    #[command(about = "Distributed coordinator: split work into chunks and serve workers (veltrix-dist-v2)")]
+    DistCoordinator(DistCoordinatorArgs),
+
+    #[command(about = "Distributed worker: pull chunks from a coordinator and execute them")]
+    DistWorker(DistWorkerArgs),
+
     #[command(about = "Display comprehensive manual with detailed usage, examples, and option reference")]
     Man,
     #[command(about = "Alias for man — display full user manual")]
@@ -225,6 +231,42 @@ pub struct ServeArgs {
 
     #[arg(long = "api-rate-limit", help = "Max API requests per minute per IP", value_name = "N", default_value = "120")]
     pub rate_per_min: u32,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DistCoordinatorArgs {
+    #[arg(long = "bind", help = "Coordinator bind address", value_name = "ADDR", default_value = "127.0.0.1:5555")]
+    pub bind: String,
+
+    #[arg(long = "dist-token", help = "Per-run worker token (or env VELTRIX_DIST_TOKEN)", value_name = "TOKEN")]
+    pub dist_token: Option<String>,
+
+    #[arg(long = "dist-token-ttl", help = "Token lifetime in seconds", value_name = "SEC", default_value = "21600")]
+    pub token_ttl: u64,
+
+    #[arg(long = "chunk-size", help = "Tasks per chunk", value_name = "N", default_value = "100")]
+    pub chunk_size: usize,
+
+    #[arg(long = "protocol", help = "Attack protocol (repeatable)", value_name = "PROTO", default_value = "ssh")]
+    pub protocols: Vec<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DistWorkerArgs {
+    #[arg(long = "connect", help = "Coordinator address host:port", value_name = "ADDR")]
+    pub connect: String,
+
+    #[arg(long = "dist-token", help = "Run token from coordinator (or env VELTRIX_DIST_TOKEN)", value_name = "TOKEN")]
+    pub dist_token: Option<String>,
+
+    #[arg(long = "name", help = "Worker hostname label", value_name = "NAME", default_value = "worker")]
+    pub name: String,
+
+    #[arg(long = "threads", help = "Max concurrent task executions", value_name = "N", default_value = "10")]
+    pub threads: usize,
+
+    #[arg(long = "checkpoint", help = "Checkpoint file for acked task_ids", value_name = "FILE")]
+    pub checkpoint: Option<PathBuf>,
 }
 
 #[derive(Args, Debug, Clone)]

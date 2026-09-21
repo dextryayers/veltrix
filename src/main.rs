@@ -229,6 +229,8 @@ async fn main() {
         Some(Commands::Validate(ref a)) => run_validate(a),
         Some(Commands::Completion(ref a)) => run_completion(a),
         Some(Commands::Serve(ref a)) => run_serve(a, running).await,
+        Some(Commands::DistCoordinator(ref a)) => run_dist_coordinator(cli, a, running).await,
+        Some(Commands::DistWorker(ref a)) => run_dist_worker(a, running).await,
         None => {
             print_banner();
             println!("{}", "Use --help or -h for usage information.".dimmed());
@@ -856,6 +858,101 @@ fn default_cli_for_validate() -> Cli {
         verbose: 0,
         dry_run: false,
     }
+}
+
+/// F7: coordinator terdistribusi. Kredensial dan target dari flag global.
+async fn run_dist_coordinator(cli: &Cli, args: &cli::DistCoordinatorArgs, running: Arc<AtomicBool>) {
+    use crate::distributed::coordinator::{Coordinator, CoordinatorConfig};
+    print_banner();
+    let token = args
+        .dist_token
+        .clone()
+        .or_else(|| std::env::var("VELTRIX_DIST_TOKEN").ok())
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or_else(|| {
+            eprintln!("Config error: --dist-token or VELTRIX_DIST_TOKEN is required");
+            std::process::exit(EXIT_CONFIG);
+        });
+    // Bangun config via path CLI standar agar validasi + preset konsisten.
+    let empty_proto = ProtocolArgs {
+        rdp_domain: None,
+        http_userfield: None,
+        http_passfield: None,
+        http_success: None,
+    };
+    let mut config = cli.build_attack_config("ssh", &empty_proto);
+    config.protocols = args.protocols.clone();
+    if let Err(e) = config.validate() {
+        exit_config(&e.to_string());
+    }
+    let targets =
+        match crate::core::attack::AttackOrchestrator::load_targets_for_distributed(&config).await {
+            Ok(t) => t,
+            Err(e) => exit_config(&e.to_string()),
+        };
+    let creds =
+        match crate::core::attack::AttackOrchestrator::load_credentials_for_distributed(&config).await {
+            Ok(c) => c,
+            Err(e) => exit_config(&e.to_string()),
+        };
+    println!(
+        "  {} run with {} targets x {} credentials, chunk size {}",
+        "Distributing".bold().cyan(),
+        targets.len(),
+        creds.len(),
+        args.chunk_size
+    );
+    println!("  {} tokens expire in {}s. Workers: veltrix dist-worker --connect <this-host> --dist-token <TOKEN>", "Auth:".bold().cyan(), args.token_ttl);
+    let mut coord = Coordinator::new(
+        CoordinatorConfig {
+            bind: args.bind.clone(),
+            run_token: token,
+            token_ttl_secs: args.token_ttl,
+            chunk_size: args.chunk_size,
+            ..Default::default()
+        },
+        targets,
+        creds,
+        config.timeout.as_secs(),
+        running,
+    );
+    let results = coord.run().await;
+    let found = results.iter().filter(|r| r.success).count();
+    println!("  {} {} results, {} successes", "Distributed done:".green().bold(), results.len(), found);
+    if found > 0 {
+        std::process::exit(EXIT_FOUND);
+    } else {
+        std::process::exit(EXIT_NOT_FOUND);
+    }
+}
+
+/// F7: worker terdistribusi.
+async fn run_dist_worker(args: &cli::DistWorkerArgs, running: Arc<AtomicBool>) {
+    use crate::distributed::worker::DistributedWorker;
+    print_banner();
+    if args.connect.trim().is_empty() {
+        exit_config("--connect ADDR is required");
+    }
+    let token = args
+        .dist_token
+        .clone()
+        .or_else(|| std::env::var("VELTRIX_DIST_TOKEN").ok())
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or_else(|| {
+            eprintln!("Config error: --dist-token or VELTRIX_DIST_TOKEN is required");
+            std::process::exit(EXIT_CONFIG);
+        });
+    let mut w = DistributedWorker::new(
+        args.connect.clone(),
+        token,
+        args.name.clone(),
+        10,
+        running,
+    );
+    w.checkpoint_path = args.checkpoint.clone();
+    let results = w.run().await;
+    let found = results.iter().filter(|r| r.success).count();
+    println!("  {} {} tasks executed, {} successes", "Worker done:".green().bold(), results.len(), found);
 }
 
 /// F6.4: jalankan REST API v2 + Web UI.
