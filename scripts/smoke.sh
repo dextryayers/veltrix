@@ -122,4 +122,66 @@ rm -rf "$TMPO"
 [ "$OOCODE" -eq 1 ] || fail "only-open filtered should exit 1, got $OOCODE"
 pass "only-open filter"
 
+# 17. serve API v2: login -> submit -> poll -> results (masked, no leak)
+python3 - "$BIN" <<'PYEOF' || fail "API v2 smoke failed"
+import subprocess, sys, time, json, urllib.request
+BIN = sys.argv[1]
+srv = subprocess.Popen([BIN, "serve", "--bind", "127.0.0.1:18099",
+                        "--api-token", "smoketoken"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+try:
+    base = "http://127.0.0.1:18099"
+    def req(method, path, body=None, token=None):
+        r = urllib.request.Request(base + path, method=method,
+            data=json.dumps(body).encode() if body is not None else None,
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})})
+        try:
+            with urllib.request.urlopen(r, timeout=10) as resp:
+                return resp.status, json.loads(resp.read() or b"{}")
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read() or b"{}")
+    for _ in range(50):
+        try:
+            s, h = req("GET", "/api/v2/health")
+            if s == 200 and h.get("status") == "ok":
+                break
+        except Exception:
+            time.sleep(0.2)
+    else:
+        raise SystemExit("server did not start")
+    s, _ = req("POST", "/api/v2/login", {"token": "wrong"})
+    assert s == 401, f"bad login should be 401, got {s}"
+    s, login = req("POST", "/api/v2/login", {"token": "smoketoken", "actor": "smoke"})
+    assert s == 200, f"login failed: {login}"
+    jwt = login["token"]
+    s, sub = req("POST", "/api/v2/jobs",
+                 {"target": "127.0.0.1", "port": 59998, "protocol": "ssh",
+                  "usernames": ["u"], "passwords": ["supersecret"],
+                  "threads": 2, "timeout_secs": 2}, jwt)
+    assert s == 202, f"submit failed: {sub}"
+    jid = sub["job_id"]
+    for _ in range(60):
+        time.sleep(0.5)
+        s, det = req("GET", f"/api/v2/jobs/{jid}", token=jwt)
+        assert s == 200, f"detail failed: {det}"
+        if det["status"] in ("completed", "failed", "stopped"):
+            break
+    else:
+        raise SystemExit("job did not finish")
+    s, res = req("GET", f"/api/v2/jobs/{jid}/results", token=jwt)
+    assert s == 200 and res["count"] >= 1, f"results failed: {res}"
+    body = json.dumps(res)
+    assert "supersecret" not in body, "password leaked in masked results!"
+    assert res["results"][0].get("credential_ref", "").startswith("u@"), "credential_ref missing"
+    s, rep = req("GET", f"/api/v2/jobs/{jid}/report?format=json", token=jwt)
+    assert s == 200 and rep.get("schema") == "veltrix-report/v2", f"report failed: {rep}"
+    s, audit = req("GET", "/api/v2/audit", token=jwt)
+    assert s == 200 and len(audit.get("audit", [])) >= 2, f"audit failed: {audit}"
+    print("API v2 login/submit/poll/results/report/audit OK, no secret leak")
+finally:
+    srv.terminate()
+PYEOF
+pass "API v2 serve smoke"
+
 echo "[OK] All smoke tests passed"
