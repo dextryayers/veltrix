@@ -64,6 +64,20 @@ pub struct AttackConfig {
     pub dry_run: bool,
     // Fase 2+3: fingerprint re-verify untuk eliminasi false positive
     pub fp_check: bool,
+    // Fase 4: stealth, spray cadence, limiter 3 level, cooldown
+    pub spray_interval: Duration,
+    pub spray_jitter_pct: u8,
+    pub target_rate_limit: Option<u64>,
+    pub user_cooldown: Duration,
+    pub lockout_cooldown: Duration,
+    pub rate_cooldown: Duration,
+    pub lockout_pause: bool,
+    pub user_agent: Option<String>,
+    pub safe_profile: bool,
+    pub aggressive_lab: bool,
+    pub i_understand_risk: bool,
+    // Fase 5: batasi attack ke hasil scan terakhir
+    pub only_open: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -170,6 +184,33 @@ impl AttackConfig {
                 "Thread count above 100 is blocked for safety. Use max 100, or split via distributed mode.",
             ));
         }
+        // F4.2/F4.5/F4.6
+        if self.spray_jitter_pct > 100 {
+            return Err(AttackError::config("--spray-jitter must be 0-100."));
+        }
+        if self.safe_profile && self.aggressive_lab {
+            return Err(AttackError::config(
+                "Cannot combine --safe-profile and --aggressive-lab.",
+            ));
+        }
+        if self.aggressive_lab && !self.i_understand_risk {
+            if self.target_file.is_some() {
+                return Err(AttackError::config(
+                    "--aggressive-lab with --list target file requires --i-understand-risk (targets cannot be verified as lab-local).",
+                ));
+            }
+            let non_lab: Vec<_> = self
+                .targets
+                .iter()
+                .filter(|t| !super::cidr::spec_is_lab(t))
+                .collect();
+            if !non_lab.is_empty() {
+                return Err(AttackError::config(format!(
+                    "--aggressive-lab blocked: non-lab target(s) {:?}. Use RFC1918/loopback targets or pass --i-understand-risk.",
+                    non_lab
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -200,6 +241,19 @@ impl AttackConfig {
         }
         if self.timeout.as_secs() < 3 {
             w.push("Timeout below 3s can cause false negatives on slow networks. Use 5-10s unless lab is local.".into());
+        }
+        // F4.x tambahan
+        if !self.spray_interval.is_zero() && !self.spray_mode {
+            w.push("--spray-interval is set but --spray is off; interval only applies between spray rounds.".into());
+        }
+        if self.lockout_pause && self.lockout_cooldown.is_zero() {
+            w.push("--lockout-pause has no effect with zero --lockout-cooldown.".into());
+        }
+        if self.aggressive_lab {
+            w.push("Aggressive lab profile: high threads, low timeout. Only for isolated lab networks you own.".into());
+        }
+        if self.safe_profile {
+            w.push("Safe profile active: conservative threads/delay/rate for production-like targets.".into());
         }
         w
     }
@@ -258,6 +312,18 @@ mod tests {
             decrypt_output: None,
             dry_run: false,
             fp_check: false,
+            spray_interval: Duration::ZERO,
+            spray_jitter_pct: 20,
+            target_rate_limit: None,
+            user_cooldown: Duration::ZERO,
+            lockout_cooldown: Duration::from_secs(600),
+            rate_cooldown: Duration::from_secs(60),
+            lockout_pause: false,
+            user_agent: None,
+            safe_profile: false,
+            aggressive_lab: false,
+            i_understand_risk: false,
+            only_open: None,
         }
     }
 

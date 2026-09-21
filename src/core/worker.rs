@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering, AtomicU64};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinSet;
 
@@ -27,6 +27,12 @@ pub struct WorkerPool {
     total_submitted: Arc<AtomicU64>,
     skipped_users: Arc<dashmap::DashSet<String>>,
     fp_check: bool,
+    // F4.3: cooldown sementara pengganti skip permanen buta.
+    lockout_cooldown: Duration,
+    rate_cooldown: Duration,
+    lockout_pause: bool,
+    user_cooldowns: Arc<dashmap::DashMap<String, Instant>>,
+    target_cooldowns: Arc<dashmap::DashMap<String, Instant>>,
 }
 
 impl WorkerPool {
@@ -44,6 +50,11 @@ impl WorkerPool {
             total_submitted: Arc::new(AtomicU64::new(0)),
             skipped_users: Arc::new(dashmap::DashSet::new()),
             fp_check: config.fp_check,
+            lockout_cooldown: config.lockout_cooldown,
+            rate_cooldown: config.rate_cooldown,
+            lockout_pause: config.lockout_pause,
+            user_cooldowns: Arc::new(dashmap::DashMap::new()),
+            target_cooldowns: Arc::new(dashmap::DashMap::new()),
         }
     }
 
@@ -69,11 +80,50 @@ impl WorkerPool {
         let proxies = Arc::clone(&self.proxies);
         let proxy_fails = Arc::clone(&self.proxy_failures);
         let fp_check = self.fp_check;
+        let lockout_cooldown = self.lockout_cooldown;
+        let rate_cooldown = self.rate_cooldown;
+        let lockout_pause = self.lockout_pause;
+        let user_cooldowns = Arc::clone(&self.user_cooldowns);
+        let target_cooldowns = Arc::clone(&self.target_cooldowns);
         let skipped = Arc::clone(&self.skipped_users);
         let target = task.target;
         let credential = task.credential;
 
         self.tasks.spawn(async move {
+            let target_key = format!("{}:{}", target.host, target.port);
+            // F4.3: hormati cooldown user yang masih aktif, tanpa attempt baru.
+            if let Some(until) = user_cooldowns.get(&credential.username).map(|r| *r) {
+                if Instant::now() < until {
+                    let _ = send_result(&external_tx,
+                        AuthResult::new(
+                            target.host.clone(), target.port, &target.protocol,
+                            credential.username.clone(), credential.password.clone(),
+                            false, Duration::ZERO,
+                            Some(format!(
+                                "Cooling down user '{}' until {:?} (lockout signal)",
+                                credential.username, until
+                            )),
+                        ),
+                    ).await;
+                    return;
+                } else {
+                    user_cooldowns.remove(&credential.username);
+                }
+            }
+            // F4.3: hormati cooldown target (rate-limit) dengan tidur bounded.
+            if let Some(until) = target_cooldowns.get(&target_key).map(|r| *r) {
+                let now = Instant::now();
+                if now < until {
+                    let sleep_for = (until - now).min(rate_cooldown.max(Duration::from_secs(1)));
+                    log::warn!(
+                        "Target {} cooling down {:.0}s (rate-limit signal)",
+                        target_key,
+                        sleep_for.as_secs_f64()
+                    );
+                    tokio::time::sleep(sleep_for).await;
+                }
+                target_cooldowns.remove(&target_key);
+            }
             if skipped.contains(&credential.username) {
                 let _ = send_result(&external_tx,
                     AuthResult::new(
@@ -152,6 +202,23 @@ impl WorkerPool {
                 }
 
                 if crate::utils::patterns::should_skip_user(&classified) {
+                    // F4.3: catat cooldown, lalu skip atau pause sesuai mode.
+                    if !lockout_cooldown.is_zero() {
+                        user_cooldowns.insert(
+                            credential.username.clone(),
+                            Instant::now() + lockout_cooldown,
+                        );
+                    }
+                    if lockout_pause && !lockout_cooldown.is_zero() {
+                        log::warn!(
+                            "User '{}' locked, pausing {:.0}s (lockout-pause mode)",
+                            credential.username,
+                            lockout_cooldown.as_secs_f64()
+                        );
+                        tokio::time::sleep(lockout_cooldown).await;
+                        user_cooldowns.remove(&credential.username);
+                        continue;
+                    }
                     skipped.insert(credential.username.clone());
                     let _ = send_result(&external_tx,
                         AuthResult {
@@ -173,6 +240,20 @@ impl WorkerPool {
                     for f in proxy_fails.iter() {
                         f.fetch_add(1, Ordering::Relaxed);
                     }
+                }
+
+                // F4.3: sinyal rate-limit memicu cooldown target bounded.
+                if classified.category == crate::utils::patterns::ResponseCategory::RateLimited
+                    && !rate_cooldown.is_zero()
+                {
+                    target_cooldowns.insert(target_key.clone(), Instant::now() + rate_cooldown);
+                    log::warn!(
+                        "Rate-limited on {}, cooling down {:.0}s",
+                        target_key,
+                        rate_cooldown.as_secs_f64()
+                    );
+                    tokio::time::sleep(rate_cooldown).await;
+                    target_cooldowns.remove(&target_key);
                 }
 
                 if attempt == retries {
@@ -210,6 +291,14 @@ impl WorkerPool {
 
     pub fn skipped_count(&self) -> usize {
         self.skipped_users.len()
+    }
+
+    pub fn user_cooldown_count(&self) -> usize {
+        self.user_cooldowns.len()
+    }
+
+    pub fn target_cooldown_count(&self) -> usize {
+        self.target_cooldowns.len()
     }
 
     pub fn proxy_failure_counts(&self) -> Vec<u64> {

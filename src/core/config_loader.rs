@@ -373,6 +373,18 @@ mod tests {
             decrypt_output: None,
             dry_run: false,
             fp_check: false,
+            spray_interval: std::time::Duration::ZERO,
+            spray_jitter_pct: 20,
+            target_rate_limit: None,
+            user_cooldown: std::time::Duration::ZERO,
+            lockout_cooldown: std::time::Duration::from_secs(600),
+            rate_cooldown: std::time::Duration::from_secs(60),
+            lockout_pause: false,
+            user_agent: None,
+            safe_profile: false,
+            aggressive_lab: false,
+            i_understand_risk: false,
+            only_open: None,
         }
     }
 

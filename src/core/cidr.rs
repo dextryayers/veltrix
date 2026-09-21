@@ -123,6 +123,59 @@ pub fn expand_targets(inputs: &[String]) -> Vec<(String, Option<u16>)> {
     results
 }
 
+/// F4.6: true jika spec menunjuk ke lab lokal (RFC1918, loopback, link-local).
+/// Hostname yang tidak bisa di-parse sebagai IP dianggap NON-lab (konservatif).
+/// IPv6: loopback ::1, link-local fe80::/10, unique-local fc00::/7.
+pub fn spec_is_lab(spec: &str) -> bool {
+    use std::net::IpAddr;
+    let s = spec.trim();
+    // Pisahkan port opsional "host:port" dan CIDR "net/prefix".
+    let host_part = if let Some(slash) = s.find('/') {
+        &s[..slash]
+    } else if let Some(pos) = s.rfind(':') {
+        let after = &s[pos + 1..];
+        // Port numerik atau range "a-b" dengan port? Range IPv4 "1.2.3.1-1.2.3.5".
+        if after.parse::<u16>().is_ok() && !s[..pos].contains('-') {
+            &s[..pos]
+        } else if s.contains('-') {
+            // Range: cek kedua ujung.
+            let mut parts = s.splitn(2, '-');
+            let a = parts.next().unwrap_or("");
+            let b = parts.next().unwrap_or("");
+            return host_is_lab_ip(a) && host_is_lab_ip(b.trim_start_matches(|c: char| c == '['));
+        } else {
+            s
+        }
+    } else {
+        s
+    };
+    let host_part = host_part.trim_matches(|c| c == '[' || c == ']');
+    host_is_lab_ip(host_part)
+}
+
+fn host_is_lab_ip(host: &str) -> bool {
+    use std::net::IpAddr;
+    let host = host.trim().trim_matches(|c| c == '[' || c == ']');
+    match host.parse::<IpAddr>() {
+        Ok(IpAddr::V4(v4)) => v4.is_private() || v4.is_loopback() || v4.is_link_local(),
+        Ok(IpAddr::V6(v6)) => {
+            v6.is_loopback() || is_link_local_v6(&v6) || is_unique_local(&v6)
+        }
+        Err(_) => false,
+    }
+}
+
+fn is_link_local_v6(v6: &std::net::Ipv6Addr) -> bool {
+    // fe80::/10
+    let o = v6.octets();
+    o[0] == 0xfe && (o[1] & 0xc0) == 0x80
+}
+
+fn is_unique_local(v6: &std::net::Ipv6Addr) -> bool {
+    // fc00::/7
+    (v6.octets()[0] & 0xfe) == 0xfc
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,5 +256,20 @@ mod tests {
     #[test]
     fn test_invalid_range_order() {
         assert!(TargetSpec::parse("10.0.0.10-10.0.0.5").is_err());
+    }
+
+    #[test]
+    fn test_spec_is_lab() {
+        assert!(spec_is_lab("192.168.1.1"));
+        assert!(spec_is_lab("10.0.0.5:3389"));
+        assert!(spec_is_lab("172.16.0.1-172.16.0.9"));
+        assert!(spec_is_lab("192.168.1.0/24"));
+        assert!(spec_is_lab("127.0.0.1"));
+        assert!(spec_is_lab("localhost") == false);
+        assert!(spec_is_lab("::1"));
+        assert!(!spec_is_lab("8.8.8.8"));
+        assert!(!spec_is_lab("1.1.1.1:443"));
+        assert!(!spec_is_lab("example.com"));
+        assert!(!spec_is_lab("8.8.8.0/24"));
     }
 }

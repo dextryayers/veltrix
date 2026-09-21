@@ -371,6 +371,44 @@ pub struct Cli {
     #[arg(long = "fp-check", help = "Fingerprint check: re-verify claimed successes to eliminate false positives", global = true)]
     pub fp_check: bool,
 
+    // ── F4: stealth, spray cadence, limiter, cooldown ──
+    #[arg(long = "spray-interval", help = "Pause between spray rounds, e.g. 30s, 30m, 2h (requires --spray)", value_name = "DUR", default_value = "0", global = true)]
+    pub spray_interval: String,
+
+    #[arg(long = "spray-jitter", help = "Symmetric jitter percent 0-100 applied to spray interval", value_name = "PCT", default_value = "20", global = true)]
+    pub spray_jitter: u8,
+
+    #[arg(long = "target-rate-limit", help = "Max attempts/sec per target (in addition to global --rate-limit)", value_name = "N", global = true)]
+    pub target_rate_limit: Option<u64>,
+
+    #[arg(long = "user-cooldown", help = "Minimum interval between attempts for the same username, e.g. 500ms, 5s", value_name = "DUR", default_value = "0", global = true)]
+    pub user_cooldown: String,
+
+    #[arg(long = "lockout-cooldown", help = "Cooldown seconds after an account-lockout signal", value_name = "SEC", default_value = "600", global = true)]
+    pub lockout_cooldown: u64,
+
+    #[arg(long = "rate-cooldown", help = "Cooldown seconds after a rate-limit signal on a target", value_name = "SEC", default_value = "60", global = true)]
+    pub rate_cooldown: u64,
+
+    #[arg(long = "lockout-pause", help = "Pause for lockout-cooldown then retry instead of skipping the user", global = true)]
+    pub lockout_pause: bool,
+
+    #[arg(long = "user-agent", help = "Override HTTP User-Agent (default: rotate realistic pool)", value_name = "STR", global = true)]
+    pub user_agent: Option<String>,
+
+    #[arg(long = "safe-profile", help = "Conservative preset for production-like targets: threads 3, delay 1000ms, rate 5/s, retries 1, stop-on-first", global = true)]
+    pub safe_profile: bool,
+
+    #[arg(long = "aggressive-lab", help = "Aggressive preset for isolated labs only: threads 50, timeout 5s. Blocked for non-lab targets unless --i-understand-risk", global = true)]
+    pub aggressive_lab: bool,
+
+    #[arg(long = "i-understand-risk", help = "Acknowledge risk for aggressive runs against non-lab targets", global = true)]
+    pub i_understand_risk: bool,
+
+    // ── F5: scan-gated attack ──
+    #[arg(long = "only-open", help = "Restrict attack targets to open ports listed in a scan-ports output file", value_name = "FILE", global = true)]
+    pub only_open: Option<PathBuf>,
+
     #[arg(long = "max-password-len", help = "Truncate passwords to N characters", value_name = "N", global = true)]
     pub max_password_len: Option<usize>,
 
@@ -485,6 +523,41 @@ impl Cli {
     }
 
     pub fn build_attack_config(&self, protocol: &str, args: &ProtocolArgs) -> AttackConfig {
+        use crate::utils::ratelimit::parse_interval_ms;
+        let fail_cfg = |e: String| -> ! {
+            eprintln!("Config error: {}", e);
+            std::process::exit(2);
+        };
+        let spray_interval = match parse_interval_ms(&self.spray_interval) {
+            Ok(ms) => std::time::Duration::from_millis(ms),
+            Err(e) => fail_cfg(format!("--spray-interval: {}", e)),
+        };
+        let user_cooldown = match parse_interval_ms(&self.user_cooldown) {
+            Ok(ms) => std::time::Duration::from_millis(ms),
+            Err(e) => fail_cfg(format!("--user-cooldown: {}", e)),
+        };
+        // F4.5/F4.6: preset hanya mengisi field yang masih di nilai default clap,
+        // sehingga flag eksplisit user selalu menang atas preset.
+        let mut threads = self.threads;
+        let mut timeout = self.timeout;
+        let mut delay = self.delay;
+        let mut rate_limit = self.rate_limit;
+        let mut retries = self.retries;
+        let mut stop_on_first = self.stop_on_first;
+        if self.safe_profile {
+            if threads == 10 { threads = 3; }
+            if delay == 0 { delay = 1000; }
+            if rate_limit.is_none() { rate_limit = Some(5); }
+            if retries == 2 { retries = 1; }
+            stop_on_first = true;
+            log::info!("safe-profile applied (threads={}, delay={}ms, rate={:?}/s, retries={}, stop-on-first)",
+                threads, delay, rate_limit, retries);
+        }
+        if self.aggressive_lab {
+            if threads == 10 { threads = 50; }
+            if timeout == 10 { timeout = 5; }
+            log::warn!("aggressive-lab applied (threads={}, timeout={}s) - lab networks only", threads, timeout);
+        }
         AttackConfig {
             targets: self.targets.clone(),
             target_file: self.target_file.clone(),
@@ -495,10 +568,10 @@ impl Cli {
             combo_file: self.combo_file.clone(),
             protocols: vec![protocol.to_string()],
             ports: self.ports.clone(),
-            threads: self.threads,
-            timeout: std::time::Duration::from_secs(self.timeout),
-            delay: std::time::Duration::from_millis(self.delay),
-            rate_limit: self.rate_limit,
+            threads,
+            timeout: std::time::Duration::from_secs(timeout),
+            delay: std::time::Duration::from_millis(delay),
+            rate_limit,
             proxy: self.proxy.clone(),
             proxy_file: self.proxy_file.clone(),
             proxy_chain: self.proxy_chain.clone(),
@@ -516,8 +589,8 @@ impl Cli {
             no_banner: false,
             single_user_mode: self.single_user,
             spray_mode: self.spray,
-            stop_on_first: self.stop_on_first,
-            retries: self.retries,
+            stop_on_first,
+            retries,
             rule_file: self.rule_file.clone(),
             max_mutations: self.max_mutations,
             max_password_len: self.max_password_len,
@@ -532,6 +605,18 @@ impl Cli {
             decrypt_output: self.decrypt_output.clone(),
             dry_run: self.dry_run,
             fp_check: self.fp_check,
+            spray_interval,
+            spray_jitter_pct: self.spray_jitter,
+            target_rate_limit: self.target_rate_limit,
+            user_cooldown,
+            lockout_cooldown: std::time::Duration::from_secs(self.lockout_cooldown),
+            rate_cooldown: std::time::Duration::from_secs(self.rate_cooldown),
+            lockout_pause: self.lockout_pause,
+            user_agent: self.user_agent.clone(),
+            safe_profile: self.safe_profile,
+            aggressive_lab: self.aggressive_lab,
+            i_understand_risk: self.i_understand_risk,
+            only_open: self.only_open.clone(),
         }
     }
 
