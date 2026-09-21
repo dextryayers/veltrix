@@ -371,6 +371,7 @@ mod tests {
             encrypt_passphrase: None,
             decrypt_file: None,
             decrypt_output: None,
+            dry_run: false,
         }
     }
 

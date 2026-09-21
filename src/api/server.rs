@@ -422,6 +422,7 @@ async fn handle_client(
                 encrypt_passphrase: None,
                 decrypt_file: None,
                 decrypt_output: None,
+                dry_run: false,
             };
 
             let job_id = cloud.submit(config, _running);
