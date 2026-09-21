@@ -793,12 +793,17 @@ veltrix ssh -t 10.0.0.1 -U users.txt -W passwords.txt -o result.html -f html
 ```
 
 - `plain`: human readable console style log
-- `json`: machine readable array of results
-- `csv`: spreadsheet friendly rows
-- `yaml`: configuration pipeline friendly output
-- `html`: styled report with summary and found credentials table
+- `json`: JSONL, one `veltrix-finding/v2` object per line (run_id, credential_ref, severity, evidence, no plaintext password)
+- `csv`: spreadsheet friendly rows (password masked unless `--show-secrets`)
+- `yaml`: configuration pipeline friendly output (password masked unless `--show-secrets`)
+- `html`: v2 report with executive summary, findings, remediation, and evidence appendix
 
 HTML mode automatically writes a report beside the selected output path.
+
+Passwords are masked (`a***`) in console, HTML, CSV, YAML, plain files, auto
+reports, and API responses by default. Use `--show-secrets` to reveal full
+values. JSON findings never contain plaintext (only `credential_ref`
+`user@host:port#hash8`).
 
 ### 13.2 Encrypted output
 
@@ -957,55 +962,66 @@ This is especially useful for large CIDR ranges and large password files.
 
 ```text
 Coordinator
-  splits target and credential space
-  sends TaskBatch messages
-  receives ResultReport messages
-  tracks Heartbeat messages
+  splits target x credential space into deterministic chunks
+  (chunk_id, checksum, resume_offset)
+  assigns chunks, requeues on timeout/worker death, dedups by task_id
+  tracks heartbeats with per-worker throughput
 
 Worker nodes
-  send Hello
-  request TaskBatch
-  execute local Protocol authenticate calls
-  return ResultReport
-  send periodic Heartbeat
+  send Hello with run token + checkpoint hint
+  request chunks, verify checksum, execute, report, checkpoint acked tasks
+  send periodic heartbeats, drain active batch gracefully on stop
 ```
 
-Protocol version identifier: `veltrix-dist-v1`.
+Protocol version identifier: `veltrix-dist-v2`.
+
+```bash
+# Terminal 1: coordinator (targets/creds dari flag global)
+veltrix dist-coordinator --bind 127.0.0.1:5555 --dist-token SECRET \
+  --chunk-size 100 -t 10.0.0.0/24 -U users.txt -W passwords.txt \
+  --protocol ssh -o dist.json -f json
+
+# Terminal 2+: workers (tiap mesin lab)
+VELTRIX_DIST_TOKEN=SECRET veltrix dist-worker \
+  --connect 10.0.0.100:5555 --name lab-node-1 --threads 20 \
+  --checkpoint-file /tmp/vw-checkpoint.json
+```
+
+Token kadaluarsa otomatis (`--dist-token-ttl`, default 6 jam). Transport wajib
+di jaringan tepercaya, idealnya WireGuard/VPN atau mTLS reverse proxy, karena
+protokol JSON-lines tidak terenkripsi sendiri. Lihat status cluster di log
+coordinator berkala.
 
 Use distributed mode to scale password spraying across lab machines while keeping result aggregation centralized.
 
-### 18.2 Minimal HTTP API
+### 18.2 REST API v2 + Web UI
 
-The built in server exposes endpoints such as:
-
-```text
-GET  /
-GET  /index.html
-GET  /api/v1/status
-GET  /api/v1/protocols
-GET  /api/v1/jobs
-GET  /api/v1/jobs/{id}
-GET  /api/v1/jobs/{id}/results
-POST /api/v1/attack
-POST /api/v1/stop
-GET  /api/v1/cloud/jobs
-GET  /api/v1/cloud/jobs/{id}
-POST /api/v1/cloud/submit
+```bash
+veltrix serve --bind 127.0.0.1:8080 --api-token SECRET
+# Web UI: http://127.0.0.1:8080/ (login, jobs, live progress, stop, report, audit)
 ```
 
-Example attack request body:
+Auth JWT HS256: `POST /api/v2/login {"token","actor"}` lalu header
+`Authorization: Bearer <JWT>` (atau `?token=` untuk websocket browser).
+Rate limit 120 req/menit/IP, audit log semua login/submit/stop/akses secrets.
 
-```json
-{
-  "target": "192.168.1.1",
-  "protocol": "ssh",
-  "port": 22,
-  "usernames": ["admin", "root"],
-  "passwords": ["admin123", "toor"]
-}
+```bash
+JWT=$(curl -s -X POST 127.0.0.1:8080/api/v2/login \
+  -H 'Content-Type: application/json' \
+  -d '{"token":"SECRET","actor":"alice"}' | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
+
+# Non-blocking submit -> 202 {job_id}; progres live via WS /api/v2/jobs/{id}/events
+curl -s -X POST 127.0.0.1:8080/api/v2/jobs -H "Authorization: Bearer $JWT" \
+  -H 'Content-Type: application/json' \
+  -d '{"target":"10.0.0.5","port":22,"protocol":"ssh",
+       "usernames":["admin"],"passwords":["admin123"]}'
 ```
 
-The API server is intentionally minimal and has no authentication or TLS by default. Bind it only to localhost or a trusted management network, or place it behind a reverse proxy with authentication.
+Hasil masked default (`?show_secrets=1` dicatat di audit). Report JSON envelope
+`veltrix-report/v2` atau HTML v2 di `/api/v2/jobs/{id}/report?format=json|html`.
+Detail lengkap: `docs/api-v2.md`.
+
+The API server has authentication and rate limiting but no TLS by default. Bind it only to localhost or a trusted management network, or place it behind a reverse proxy with TLS.
 
 ---
 

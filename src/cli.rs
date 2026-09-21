@@ -247,6 +247,15 @@ pub struct DistCoordinatorArgs {
     #[arg(long = "chunk-size", help = "Tasks per chunk", value_name = "N", default_value = "100")]
     pub chunk_size: usize,
 
+    #[arg(long = "chunk-timeout", help = "Seconds before an in-flight chunk is requeued", value_name = "SEC", default_value = "120")]
+    pub chunk_timeout: u64,
+
+    #[arg(long = "heartbeat-timeout", help = "Seconds without heartbeat before a worker is dropped", value_name = "SEC", default_value = "60")]
+    pub heartbeat_timeout: u64,
+
+    #[arg(long = "max-attempts", help = "Max assignments per chunk before marking failed", value_name = "N", default_value = "3")]
+    pub max_attempts: u32,
+
     #[arg(long = "protocol", help = "Attack protocol (repeatable)", value_name = "PROTO", default_value = "ssh")]
     pub protocols: Vec<String>,
 }
@@ -265,8 +274,8 @@ pub struct DistWorkerArgs {
     #[arg(long = "threads", help = "Max concurrent task executions", value_name = "N", default_value = "10")]
     pub threads: usize,
 
-    #[arg(long = "checkpoint", help = "Checkpoint file for acked task_ids", value_name = "FILE")]
-    pub checkpoint: Option<PathBuf>,
+    #[arg(long = "checkpoint-file", help = "Checkpoint file for acked task_ids", value_name = "FILE")]
+    pub checkpoint_file: Option<PathBuf>,
 }
 
 #[derive(Args, Debug, Clone)]

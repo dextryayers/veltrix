@@ -181,7 +181,9 @@ impl Coordinator {
         log::info!("Coordinator listening on {}", self.config.bind);
 
         let running = Arc::clone(&self.running);
-        let mut status_tick = tokio::time::interval(Duration::from_secs(15));
+        // Reaper menyusul timeout tercepat: setengah chunk_timeout, 1-15 detik.
+        let reap_secs = (self.config.chunk_timeout_secs / 3).clamp(1, 15);
+        let mut status_tick = tokio::time::interval(Duration::from_secs(reap_secs));
         status_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {

@@ -229,7 +229,7 @@ async fn main() {
         Some(Commands::Validate(ref a)) => run_validate(a),
         Some(Commands::Completion(ref a)) => run_completion(a),
         Some(Commands::Serve(ref a)) => run_serve(a, running).await,
-        Some(Commands::DistCoordinator(ref a)) => run_dist_coordinator(cli, a, running).await,
+        Some(Commands::DistCoordinator(ref a)) => run_dist_coordinator(&cli, a, running).await,
         Some(Commands::DistWorker(ref a)) => run_dist_worker(a, running).await,
         None => {
             print_banner();
@@ -909,7 +909,9 @@ async fn run_dist_coordinator(cli: &Cli, args: &cli::DistCoordinatorArgs, runnin
             run_token: token,
             token_ttl_secs: args.token_ttl,
             chunk_size: args.chunk_size,
-            ..Default::default()
+            chunk_timeout_secs: args.chunk_timeout,
+            heartbeat_timeout_secs: args.heartbeat_timeout,
+            max_chunk_attempts: args.max_attempts,
         },
         targets,
         creds,
@@ -918,11 +920,70 @@ async fn run_dist_coordinator(cli: &Cli, args: &cli::DistCoordinatorArgs, runnin
     );
     let results = coord.run().await;
     let found = results.iter().filter(|r| r.success).count();
+    // Tulis -o bila diminta (format sama seperti mode attack).
+    if let Some(ref out_path) = config.output_file {
+        write_dist_output(out_path, &config, coord.run_id(), &results);
+    }
     println!("  {} {} results, {} successes", "Distributed done:".green().bold(), results.len(), found);
     if found > 0 {
         std::process::exit(EXIT_FOUND);
     } else {
         std::process::exit(EXIT_NOT_FOUND);
+    }
+}
+
+/// Tulis output dist-coordinator sesuai -f (json v2 / html / plain).
+fn write_dist_output(
+    path: &std::path::Path,
+    config: &crate::core::config::AttackConfig,
+    run_id: &str,
+    results: &[crate::core::result::AuthResult],
+) {
+    use crate::core::config::OutputFormat;
+    use crate::core::result::FindingV2;
+    let started = chrono::Utc::now().to_rfc3339();
+    match config.output_format {
+        OutputFormat::Json => {
+            let mut out = String::new();
+            for (i, r) in results.iter().enumerate() {
+                let f = FindingV2::from_result(r, run_id, i as u64, &started);
+                out.push_str(&serde_json::to_string(&f).unwrap_or_default());
+                out.push('\n');
+            }
+            if let Err(e) = std::fs::write(path, out) {
+                log::error!("Failed to write dist output: {}", e);
+            }
+        }
+        OutputFormat::Html => {
+            let summary = crate::core::result::AttackSummary {
+                run_id: run_id.to_string(),
+                start_time: chrono::Utc::now(),
+                end_time: Some(chrono::Utc::now()),
+                total_targets: 0,
+                total_credentials: 0,
+                attempts: results.len() as u64,
+                successes: results.iter().filter(|r| r.success).count() as u64,
+                failures: 0,
+                errors: 0,
+                results: results.to_vec(),
+                total_duration: None,
+            };
+            if let Err(e) =
+                crate::utils::report::save_html_report(path, &summary, config.show_secrets)
+            {
+                log::error!("Failed to write dist HTML report: {}", e);
+            }
+        }
+        _ => {
+            let mut out = String::new();
+            for r in results {
+                let line = if config.show_secrets { r.display_full() } else { r.display() };
+                out.push_str(&format!("{}\n", line));
+            }
+            if let Err(e) = std::fs::write(path, out) {
+                log::error!("Failed to write dist output: {}", e);
+            }
+        }
     }
 }
 
@@ -946,10 +1007,10 @@ async fn run_dist_worker(args: &cli::DistWorkerArgs, running: Arc<AtomicBool>) {
         args.connect.clone(),
         token,
         args.name.clone(),
-        10,
+        args.threads.clamp(1, 100),
         running,
     );
-    w.checkpoint_path = args.checkpoint.clone();
+    w.checkpoint_path = args.checkpoint_file.clone();
     let results = w.run().await;
     let found = results.iter().filter(|r| r.success).count();
     println!("  {} {} tasks executed, {} successes", "Worker done:".green().bold(), results.len(), found);
