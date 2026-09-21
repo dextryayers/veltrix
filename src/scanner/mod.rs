@@ -1,10 +1,12 @@
 pub mod banner;
+pub mod policy;
 pub mod scanner;
 pub mod service_db;
 
 pub use scanner::Scanner;
 pub use banner::BannerGrabber;
 pub use service_db::ServiceDb;
+pub use policy::AutoPolicy;
 
 use std::fmt;
 use colored::*;

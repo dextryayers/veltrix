@@ -19,10 +19,12 @@ pub fn set_form_passfield(val: &str) { let _ = HTTP_PASSFIELD.set(val.to_string(
 pub fn set_form_success(val: &str) { let _ = HTTP_SUCCESS.set(val.to_string()); }
 
 fn build_client(timeout_dur: Duration, proxy: &Option<ProxyConfig>) -> Result<reqwest::Client, String> {
+    // F4.4: UA dirotasi per attempt dari pool realistis (atau override).
+    let ua = transport::next_user_agent();
     let (client, warning) = transport::build_reqwest_client(
         timeout_dur,
         proxy,
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+        &ua,
     );
     if let Some(w) = warning {
         log::warn!("{}", w);

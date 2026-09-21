@@ -176,6 +176,7 @@ async fn main() {
 
     match cli.command {
         Some(Commands::ScanPorts(ref args)) => run_scan(&cli, args, running).await,
+        Some(Commands::Auto(ref args)) => run_auto(&cli, args, running).await,
         Some(Commands::Ssh(ref a)) => run_attack(&cli, "ssh", a, running).await,
         Some(Commands::Ftp(ref a)) => run_attack(&cli, "ftp", a, running).await,
         Some(Commands::Telnet(ref a)) => run_attack(&cli, "telnet", a, running).await,
@@ -299,8 +300,285 @@ async fn run_scan(cli: &Cli, args: &cli::ScanPortsArgs, running: Arc<AtomicBool>
     }
 }
 
-async fn run_attack(cli: &Cli, protocol: &str, args: &ProtocolArgs, running: Arc<AtomicBool>) {
-    if cli.should_show_banner() {
+#[derive(serde::Serialize)]
+struct AutoFoundCred {
+    host: String,
+    port: u16,
+    user: String,
+    pass: String,
+}
+
+#[derive(serde::Serialize)]
+struct AutoGroupReport {
+    protocol: String,
+    port: u16,
+    targets: Vec<String>,
+    confidence: u8,
+    reason: String,
+    attempts: u64,
+    successes: u64,
+    failures: u64,
+    errors: u64,
+    found: Vec<AutoFoundCred>,
+}
+
+#[derive(serde::Serialize)]
+struct AutoReport {
+    tool: String,
+    version: String,
+    scan_id: String,
+    started_at: String,
+    targets: Vec<String>,
+    ports_scanned: usize,
+    open_ports: usize,
+    groups: Vec<AutoGroupReport>,
+    total_successes: u64,
+}
+
+/// F5.2/F5.4: scan, fingerprint, attack hanya service terbuka yang didukung.
+async fn run_auto(cli: &Cli, args: &cli::AutoArgs, running: Arc<AtomicBool>) {
+    use std::collections::BTreeMap;
+    print_banner();
+
+    let scan_id = uuid::Uuid::new_v4().to_string();
+    let started_at = chrono::Utc::now().to_rfc3339();
+
+    // Target & port: logika sama seperti run_scan.
+    let hosts = if !cli.targets.is_empty() {
+        cli.targets.clone()
+    } else if let Some(ref file) = cli.target_file {
+        std::fs::read_to_string(file)
+            .unwrap_or_else(|e| {
+                eprintln!("Failed to read target file: {}", e);
+                std::process::exit(1);
+            })
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect()
+    } else {
+        eprintln!("No targets specified. Use -t or --list.");
+        std::process::exit(EXIT_CONFIG);
+    };
+    let ports = match args.scan.port_spec.as_deref() {
+        Some("common") | None => crate::scanner::scanner::common_ports(),
+        Some(spec) => match crate::scanner::scanner::parse_port_spec(spec) {
+            Ok(p) => p,
+            Err(e) => exit_config(&format!("invalid port specification: {}", e)),
+        },
+    };
+
+    let policy = match args.policy.as_ref() {
+        Some(p) => match crate::scanner::AutoPolicy::load(p) {
+            Ok(pol) => pol,
+            Err(e) => exit_config(&e.to_string()),
+        },
+        None => crate::scanner::AutoPolicy::default(),
+    };
+    let min_conf = args.min_confidence.unwrap_or_else(|| policy.min_confidence()).min(100);
+
+    // 1. Scan.
+    let scan_config = crate::scanner::scanner::ScanConfig {
+        hosts: hosts.clone(),
+        ports: ports.clone(),
+        timeout_secs: args.scan.scan_timeout,
+        max_concurrent: args.scan.scan_rate,
+        banner_grab: !args.scan.no_banner,
+        retries: 0,
+        show_progress: true,
+    };
+    let scanner = crate::scanner::Scanner::new(scan_config, running.clone());
+    let results = scanner.scan().await;
+    crate::scanner::print_scan_results(&results);
+
+    // 2. Fingerprint + grouping.
+    let db = crate::scanner::ServiceDb::new();
+    // (proto, port) -> (hosts, best_conf, reason)
+    let mut groups: BTreeMap<(String, u16), (Vec<String>, u8, String)> = BTreeMap::new();
+    let mut skipped = 0usize;
+    for r in results.iter().filter(|r| r.open) {
+        let ident = crate::scanner::service_db::identify_attack(
+            &db,
+            r.port,
+            r.banner.as_deref().unwrap_or(""),
+            r.product.as_deref(),
+        );
+        match ident {
+            Some((proto, conf, reason)) if conf >= min_conf => {
+                if !policy.allows_protocol(&proto) {
+                    log::warn!("auto: {}:{} protocol {} blocked by policy", r.host, r.port, proto);
+                    skipped += 1;
+                    continue;
+                }
+                if !policy.allows_host(&r.host) {
+                    log::warn!("auto: host {} blocked by policy subnets", r.host);
+                    skipped += 1;
+                    continue;
+                }
+                let e = groups
+                    .entry((proto.clone(), r.port))
+                    .or_insert_with(|| (Vec::new(), 0, reason.clone()));
+                if !e.0.contains(&r.host) {
+                    e.0.push(r.host.clone());
+                }
+                if conf > e.1 {
+                    e.1 = conf;
+                    e.2 = reason.clone();
+                }
+            }
+            Some((proto, conf, _)) => {
+                log::info!("auto: {}:{} {} confidence {} below minimum {}", r.host, r.port, proto, conf, min_conf);
+                skipped += 1;
+            }
+            None => {
+                log::info!("auto: {}:{} service '{}' has no attack module, skipped", r.host, r.port, r.service);
+                skipped += 1;
+            }
+        }
+    }
+
+    if groups.is_empty() {
+        eprintln!("auto: no attackable open services ({} skipped). Nothing to do.", skipped);
+        std::process::exit(EXIT_NOT_FOUND);
+    }
+
+    println!("  {} {} attack group(s), {} skipped",
+        "auto:".cyan().bold(),
+        groups.len(),
+        skipped,
+    );
+    for ((proto, port), (hosts, conf, reason)) in &groups {
+        println!("    - {}:{} hosts={} conf={} ({})", proto, port, hosts.len(), conf, reason);
+    }
+
+    // 3. Attack per grup.
+    let empty_proto = ProtocolArgs {
+        rdp_domain: None,
+        http_userfield: None,
+        http_passfield: None,
+        http_success: None,
+    };
+    let mut group_reports = Vec::new();
+    for ((proto, port), (hosts, conf, reason)) in groups {
+        let mut config = cli.build_attack_config(&proto, &empty_proto);
+        if let Some(m) = policy.max_threads {
+            if config.threads > m {
+                log::info!("auto: clamping threads {} -> {} per policy", config.threads, m);
+                config.threads = m;
+            }
+        }
+        config.targets = hosts.iter().map(|h| format!("{}:{}", h, port)).collect();
+        config.protocols = vec![proto.clone()];
+        config.output_file = None; // laporan gabungan ditulis sekali di akhir
+        if let Err(e) = config.validate() {
+            eprintln!("auto: skipping group {}:{}: {}", proto, port, e);
+            continue;
+        }
+        for w in config.risk_warnings() {
+            eprintln!("warning: {}", w);
+        }
+        let mut orch = match AttackOrchestrator::new(config, running.clone()).await {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("auto: cannot start group {}:{}: {}", proto, port, e);
+                continue;
+            }
+        };
+        let summary = orch.run().await;
+        group_reports.push(AutoGroupReport {
+            protocol: proto.clone(),
+            port,
+            targets: hosts.clone(),
+            confidence: conf,
+            reason: reason.clone(),
+            attempts: summary.attempts,
+            successes: summary.successes,
+            failures: summary.failures,
+            errors: summary.errors,
+            found: summary
+                .results
+                .iter()
+                .filter(|r| r.success)
+                .map(|r| AutoFoundCred {
+                    host: r.target_host.clone(),
+                    port: r.target_port,
+                    user: r.username.clone(),
+                    pass: r.password.clone(),
+                })
+                .collect(),
+        });
+        if !running.load(Ordering::SeqCst) {
+            eprintln!("auto: interrupted, stopping after current group.");
+            break;
+        }
+    }
+
+    // 4. Laporan gabungan (F5.4).
+    let total_successes: u64 = group_reports.iter().map(|g| g.successes).sum();
+    let open_ports = results.iter().filter(|r| r.open).count();
+    let report = AutoReport {
+        tool: "veltrix-auto".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+        scan_id,
+        started_at,
+        targets: hosts,
+        ports_scanned: ports.len(),
+        open_ports,
+        groups: group_reports,
+        total_successes,
+    };
+    write_auto_report(cli, &report);
+
+    if cli.dry_run {
+        std::process::exit(EXIT_FOUND);
+    }
+    if total_successes > 0 {
+        std::process::exit(EXIT_FOUND);
+    } else {
+        std::process::exit(EXIT_NOT_FOUND);
+    }
+}
+
+fn write_auto_report(cli: &Cli, report: &AutoReport) {
+    let as_json = cli.format.eq_ignore_ascii_case("json")
+        || cli
+            .output
+            .as_ref()
+            .and_then(|p| p.extension())
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("json"))
+            .unwrap_or(false);
+    let body = if as_json {
+        serde_json::to_string_pretty(report).unwrap_or_else(|_| "{}".into())
+    } else {
+        let mut s = format!(
+            "Veltrix Auto Report v{} scan={} groups={} successes={}\n",
+            report.version, report.scan_id, report.groups.len(), report.total_successes
+        );
+        for g in &report.groups {
+            s.push_str(&format!(
+                "- {}:{} hosts={} conf={} attempts={} found={} ({})\n",
+                g.protocol, g.port, g.targets.len(), g.confidence, g.attempts, g.successes, g.reason
+            ));
+            for f in &g.found {
+                s.push_str(&format!("    FOUND {}:{} [{}:{}]\n", f.host, f.port, f.user, f.pass));
+            }
+        }
+        s
+    };
+    match cli.output.as_ref() {
+        Some(path) => {
+            if let Err(e) = std::fs::write(path, &body) {
+                eprintln!("Failed to write auto report: {}", e);
+            } else {
+                log::info!("Auto report saved to {}", path.display());
+            }
+        }
+        None => println!("{}", body),
+    }
+}
+
+async fn run_attack(cli: &Cli, protocol: &str, args: &ProtocolArgs, running: Arc<AtomicBool>) {    if cli.should_show_banner() {
         print_banner();
     }
 

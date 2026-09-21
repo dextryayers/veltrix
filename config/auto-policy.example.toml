@@ -1,0 +1,13 @@
+# Veltrix auto-mode policy example.
+# Copy to auto-policy.toml and pass with: veltrix auto --policy auto-policy.toml ...
+# Only authorized lab targets. Empty/absent lists mean "allow all".
+
+[policy]
+# Attack modules auto mode may launch.
+allowed_protocols = ["ssh", "ftp", "http", "mysql", "postgres", "smb", "rdp", "redis"]
+# IPv4 subnets auto mode may attack. Hostnames that do not parse as IP are rejected.
+allowed_subnets = ["192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12"]
+# Cap threads per attack group (CLI value wins if lower; higher CLI values are clamped).
+max_threads = 20
+# Minimum fingerprint confidence 0-100 to launch an attack group.
+min_confidence = 50

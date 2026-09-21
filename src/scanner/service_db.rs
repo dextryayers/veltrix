@@ -1688,3 +1688,151 @@ fn build_port_map() -> HashMap<u16, &'static str> {
     m.insert(61616, "activemq");
     m
 }   
+
+// ── F5.1: attack mapping + confidence untuk mode auto ─────────────────────
+
+/// Petakan nama service hasil fingerprint ke protokol attack veltrix.
+/// Return None untuk service yang tidak punya modul attack.
+pub fn attack_protocol_for_service(service: &str) -> Option<&'static str> {
+    match service.to_lowercase().as_str() {
+        "ssh" | "openssh" | "libssh" | "dropbear" | "ssh-2.0" => Some("ssh"),
+        "ftp" | "ftps" | "ftps-data" | "pure-ftpd" | "proftpd" | "vsftpd" | "filezilla" => Some("ftp"),
+        "telnet" | "telnet-ssl" => Some("telnet"),
+        "smtp" | "smtps" | "smtp-alt" | "submission" => Some("smtp"),
+        "pop3" | "pop3s" => Some("pop3"),
+        "imap" | "imaps" => Some("imap"),
+        "rdp" | "ms-wbt-server" => Some("rdp"),
+        "mysql" | "mariadb" => Some("mysql"),
+        "postgres" | "postgresql" => Some("postgres"),
+        "ldap" | "ldaps" => Some("ldap"),
+        "redis" => Some("redis"),
+        "http" | "https" | "http-proxy" | "squid" | "squid-http" => Some("http"),
+        "vnc" => Some("vnc"),
+        "mongodb" => Some("mongodb"),
+        "ms-sql-s" | "ms-sql-m" | "mssql" => Some("mssql"),
+        "microsoft-ds" | "smb" | "netbios-ssn" => Some("smb"),
+        "snmp" | "snmptrap" => Some("snmp"),
+        "oracle" | "oracle-ssl" => Some("oracle"),
+        "cassandra" => Some("cassandra"),
+        "couchdb" => Some("couchdb"),
+        "elasticsearch" => Some("elasticsearch"),
+        "firebird" => Some("firebird"),
+        "rabbitmq" | "amqp" | "amqps" => Some("rabbitmq"),
+        "activemq" => Some("activemq"),
+        "kafka" => Some("kafka"),
+        "sip" => Some("sip"),
+        "rtsp" => Some("rtsp"),
+        "tomcat" => Some("tomcat"),
+        "jenkins" => Some("jenkins"),
+        "gitlab" => Some("gitlab"),
+        "sonarqube" => Some("sonarqube"),
+        "docker" | "docker-ssl" => Some("docker"),
+        "kubernetes" => Some("kubernetes"),
+        "vault" => Some("vault"),
+        "consul" => Some("consul"),
+        "vmware-server" | "vmware" => Some("vmware"),
+        "ilo" => Some("ilo"),
+        "ipmi" => Some("ipmi"),
+        "xmpp" => Some("xmpp"),
+        "irc" | "ircs" => Some("irc"),
+        "nntp" | "nntps" => Some("nntp"),
+        "cvs" => Some("cvs"),
+        "svn" => Some("svn"),
+        "rexec" => Some("rexec"),
+        "rlogin" => Some("rlogin"),
+        "memcached" => Some("memcached"),
+        _ => None,
+    }
+}
+
+/// Hasil identifikasi attack untuk satu open port:
+/// (protocol, confidence 0-100, alasan).
+/// Confidence: product dari banner regex 90, banner rule 75, port-only 50.
+pub fn identify_attack(
+    db: &ServiceDb,
+    port: u16,
+    banner: &str,
+    product: Option<&str>,
+) -> Option<(String, u8, String)> {
+    // 1. Product teridentifikasi dari banner regex = keyakinan tertinggi.
+    if let Some(prod) = product {
+        if let Some(proto) = attack_protocol_for_service(prod) {
+            return Some((
+                proto.to_string(),
+                90,
+                format!("banner matched product '{}'", prod),
+            ));
+        }
+        // Product dikenal tapi tak ada modul attack: tetap laporkan agar
+        // operator tahu port ini sengaja di-skip.
+        return None;
+    }
+    // 2. Banner mengandung nama service yang punya modul attack.
+    if !banner.is_empty() {
+        let lower = banner.to_lowercase();
+        for rule in &db.banner_rules {
+            if lower.contains(rule.pattern) {
+                if let Some(proto) = attack_protocol_for_service(rule.product) {
+                    return Some((
+                        proto.to_string(),
+                        75,
+                        format!("banner rule '{}'", rule.product),
+                    ));
+                }
+            }
+        }
+    }
+    // 3. Fallback port-only.
+    let service = db.lookup(port);
+    if service != "unknown" {
+        if let Some(proto) = attack_protocol_for_service(&service) {
+            return Some((proto.to_string(), 50, format!("port {} default", port)));
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod auto_tests {
+    use super::*;
+
+    #[test]
+    fn service_mapping_covers_core() {
+        for (svc, proto) in [
+            ("ssh", "ssh"), ("ftp", "ftp"), ("smtp", "smtp"),
+            ("mysql", "mysql"), ("microsoft-ds", "smb"), ("ms-wbt-server", "rdp"),
+            ("redis", "redis"), ("https", "http"), ("smtps", "smtp"),
+            ("imaps", "imap"), ("pop3s", "pop3"), ("ms-sql-s", "mssql"),
+            ("oracle", "oracle"), ("docker", "docker"), ("squid-http", "http"),
+        ] {
+            assert_eq!(attack_protocol_for_service(svc), Some(proto), "service {}", svc);
+        }
+        assert_eq!(attack_protocol_for_service("telnet"), Some("telnet"));
+        assert_eq!(attack_protocol_for_service("gopher"), None);
+        assert_eq!(attack_protocol_for_service("unknown"), None);
+    }
+
+    #[test]
+    fn confidence_product_beats_port() {
+        let db = ServiceDb::new();
+        let hit = identify_attack(&db, 22, "SSH-2.0-OpenSSH_9.3", Some("OpenSSH")).unwrap();
+        assert_eq!(hit.0, "ssh");
+        assert_eq!(hit.1, 90);
+        let port_only = identify_attack(&db, 22, "", None).unwrap();
+        assert_eq!(port_only.0, "ssh");
+        assert_eq!(port_only.1, 50);
+    }
+
+    #[test]
+    fn unknown_port_returns_none() {
+        let db = ServiceDb::new();
+        assert!(identify_attack(&db, 9999, "", None).is_none());
+    }
+
+    #[test]
+    fn known_product_without_module_returns_none() {
+        let db = ServiceDb::new();
+        // dns tidak punya modul attack.
+        assert!(identify_attack(&db, 53, "", Some("dns")).is_none());
+    }
+}

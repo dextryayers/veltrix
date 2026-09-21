@@ -36,10 +36,25 @@ pub struct ScanPortsArgs {
     pub no_banner: bool,
 }
 
+#[derive(Args, Debug, Clone)]
+pub struct AutoArgs {
+    #[command(flatten)]
+    pub scan: ScanPortsArgs,
+
+    #[arg(long = "policy", help = "Auto-mode policy file (TOML): allowed protocols/subnets, max threads, min confidence", value_name = "FILE")]
+    pub policy: Option<PathBuf>,
+
+    #[arg(long = "min-confidence", help = "Minimum fingerprint confidence 0-100 to launch an attack group", value_name = "N")]
+    pub min_confidence: Option<u8>,
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     #[command(about = "Fast TCP port scanner with banner grabbing and service fingerprinting")]
     ScanPorts(ScanPortsArgs),
+
+    #[command(about = "Automatic scan-to-attack: scan ports, fingerprint services, brute-force only open attackable services")]
+    Auto(AutoArgs),
 
     #[command(about = "SSH protocol brute force attack")]
     Ssh(ProtocolArgs),

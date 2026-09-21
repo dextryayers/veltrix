@@ -127,7 +127,6 @@ pub fn expand_targets(inputs: &[String]) -> Vec<(String, Option<u16>)> {
 /// Hostname yang tidak bisa di-parse sebagai IP dianggap NON-lab (konservatif).
 /// IPv6: loopback ::1, link-local fe80::/10, unique-local fc00::/7.
 pub fn spec_is_lab(spec: &str) -> bool {
-    use std::net::IpAddr;
     let s = spec.trim();
     // Pisahkan port opsional "host:port" dan CIDR "net/prefix".
     let host_part = if let Some(slash) = s.find('/') {
