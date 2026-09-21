@@ -228,6 +228,7 @@ async fn main() {
         Some(Commands::Create(ref a)) => run_create(a).await,
         Some(Commands::Validate(ref a)) => run_validate(a),
         Some(Commands::Completion(ref a)) => run_completion(a),
+        Some(Commands::Serve(ref a)) => run_serve(a, running).await,
         None => {
             print_banner();
             println!("{}", "Use --help or -h for usage information.".dimmed());
@@ -857,8 +858,35 @@ fn default_cli_for_validate() -> Cli {
     }
 }
 
-fn run_completion(args: &cli::CompletionArgs) {
-    use clap_complete::{generate, shells::{Bash, Fish, PowerShell, Zsh}};
+/// F6.4: jalankan REST API v2 + Web UI.
+async fn run_serve(args: &cli::ServeArgs, running: Arc<AtomicBool>) {
+    print_banner();
+    let token = args
+        .api_token
+        .clone()
+        .or_else(|| std::env::var("VELTRIX_API_TOKEN").ok())
+        .filter(|t| !t.trim().is_empty());
+    let (server, shown) = crate::api::server::ApiServer::new(
+        args.bind.clone(),
+        running,
+        token,
+        args.rate_per_min,
+    );
+    println!("  {} http://{}/", "Web UI:".bold().cyan(), args.bind);
+    println!("  {} POST /api/v2/login {{\"token\": <API-TOKEN>}}", "Login:".bold().cyan());
+    match shown {
+        Some(t) => {
+            eprintln!("  [!] Ephemeral API token (shown once, valid for this process): {}", t);
+            log::warn!("Ephemeral API token generated; use --api-token or VELTRIX_API_TOKEN for stable ops");
+        }
+        None => {
+            println!("  {} using configured API token", "Auth:".bold().cyan());
+        }
+    }
+    server.run().await;
+}
+
+fn run_completion(args: &cli::CompletionArgs) {    use clap_complete::{generate, shells::{Bash, Fish, PowerShell, Zsh}};
     use std::io::stdout;
     let mut cmd = Cli::command();
     match args.shell.to_lowercase().as_str() {

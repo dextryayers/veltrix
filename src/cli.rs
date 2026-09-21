@@ -194,6 +194,9 @@ pub enum Commands {
     #[command(about = "Print shell completion script (bash, zsh, fish, powershell)")]
     Completion(CompletionArgs),
 
+    #[command(about = "Start REST API v2 + Web UI server (JWT auth, job queue, live progress)")]
+    Serve(ServeArgs),
+
     #[command(about = "Display comprehensive manual with detailed usage, examples, and option reference")]
     Man,
     #[command(about = "Alias for man — display full user manual")]
@@ -210,6 +213,18 @@ pub struct ValidateArgs {
 pub struct CompletionArgs {
     #[arg(help = "Shell: bash, zsh, fish, powershell")]
     pub shell: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ServeArgs {
+    #[arg(long = "bind", help = "API bind address (default 127.0.0.1:8080; bind 0.0.0.0 only on trusted nets)", value_name = "ADDR", default_value = "127.0.0.1:8080")]
+    pub bind: String,
+
+    #[arg(long = "api-token", help = "Pre-shared API token (or env VELTRIX_API_TOKEN; ephemeral if omitted)", value_name = "TOKEN")]
+    pub api_token: Option<String>,
+
+    #[arg(long = "api-rate-limit", help = "Max API requests per minute per IP", value_name = "N", default_value = "120")]
+    pub rate_per_min: u32,
 }
 
 #[derive(Args, Debug, Clone)]

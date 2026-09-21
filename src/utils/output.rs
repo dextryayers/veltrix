@@ -349,24 +349,6 @@ impl LiveDashboard {
             if result.success { "OK" } else { "FAIL" },
         ));
 
-        self.seq += 1;
-        let run_id = self.run_id.clone();
-        let started_at = self.started_at.clone();
-        let seq = self.seq;
-        let show_secrets = self.show_secrets;
-        if let Some(ref mut file) = self.file {
-            write_output(
-                &self.format,
-                self.writer.as_mut(),
-                file,
-                result,
-                &run_id,
-                seq,
-                &started_at,
-                show_secrets,
-            );
-        }
-
         self.update_progress();
         let _ = std::io::stdout().flush();
     }
@@ -574,7 +556,10 @@ impl OutputHandler {
             target_count,
             cred_count,
         ) {
-            Ok(d) => self.dashboard = Some(d),
+            Ok(mut d) => {
+                d.show_secrets = self.show_secrets;
+                self.dashboard = Some(d);
+            }
             Err(_) => {}
         }
     }
@@ -598,8 +583,23 @@ impl OutputHandler {
             d.on_result(result);
         }
 
+        // F6.1: JSONL v2 + F6.3 redaksi file.
+        self.seq += 1;
+        let run_id = self.run_id.clone();
+        let started_at = self.started_at.clone();
+        let seq = self.seq;
+        let show_secrets = self.show_secrets;
         if let Some(ref mut file) = self.file {
-            write_output(&self.format, self.writer.as_mut(), file, result);
+            write_output(
+                &self.format,
+                self.writer.as_mut(),
+                file,
+                result,
+                &run_id,
+                seq,
+                &started_at,
+                show_secrets,
+            );
         }
     }
 

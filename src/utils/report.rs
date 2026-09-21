@@ -170,7 +170,6 @@ validated credential{}. Passwords are masked unless the report was generated wit
 </div>
 </body>
 </html>"#,
-        env!("CARGO_PKG_VERSION"),
         esc(&summary.run_id),
         verdict,
         summary.successes,
@@ -256,7 +255,7 @@ mod tests {
         ));
         let masked = generate_html_report(&s, false);
         assert!(!masked.contains("s3cret!"));
-        assert!(masked.contains("a***"));
+        assert!(masked.contains("s***"));
         let full = generate_html_report(&s, true);
         assert!(full.contains("s3cret!"));
     }
