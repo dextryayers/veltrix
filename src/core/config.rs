@@ -62,6 +62,8 @@ pub struct AttackConfig {
     pub decrypt_output: Option<std::path::PathBuf>,
     // Fase 1: dry-run preview tanpa network I/O
     pub dry_run: bool,
+    // Fase 2+3: fingerprint re-verify untuk eliminasi false positive
+    pub fp_check: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -158,7 +160,48 @@ impl AttackConfig {
         if self.checkpoint_interval == 0 {
             return Err(AttackError::config("Checkpoint interval must be > 0"));
         }
+        if self.spray_mode && self.single_user_mode {
+            return Err(AttackError::config(
+                "Cannot combine --spray and --single-user. Choose one credential order.",
+            ));
+        }
+        if self.threads > 100 {
+            return Err(AttackError::config(
+                "Thread count above 100 is blocked for safety. Use max 100, or split via distributed mode.",
+            ));
+        }
         Ok(())
+    }
+
+    /// Peringatan non-fatal untuk pola berisiko lockout atau salah konfigurasi.
+    /// Dipanggil setelah `validate()` lolos, ditampilkan sebelum attack jalan.
+    pub fn risk_warnings(&self) -> Vec<String> {
+        let mut w = Vec::new();
+        if self.spray_mode && self.delay.as_millis() == 0 && self.rate_limit.is_none() {
+            w.push("Spray mode without --delay or --rate-limit risks account lockout. Add --delay 1000 or --rate-limit 5 for production-like targets.".into());
+        }
+        if !self.spray_mode && self.threads >= 20 && self.delay.as_millis() == 0 {
+            w.push(format!(
+                "High threads ({}) with zero delay can trigger lockout or IDS. Consider --spray, --delay 200, or --rate-limit.",
+                self.threads
+            ));
+        }
+        if self.password_file.is_some() && self.users.is_empty() && self.user_file.is_none() {
+            w.push("Password file set but no users provided. Add -u or -U, or use --single-user.".into());
+        }
+        if self.combo_file.is_some() && (!self.users.is_empty() || !self.passwords.is_empty()) {
+            w.push("Combo file ignores -u/--password direct values for credential building. Remove combo or direct values to avoid confusion.".into());
+        }
+        if self.proxy_chain.is_some() && self.protocols.iter().any(|p| p == "http") {
+            w.push("HTTP via proxy-chain currently uses the first proxy for reqwest. Chain is honored for raw TCP protocols; HTTP chain support is partial.".into());
+        }
+        if self.api_bind.is_some() {
+            w.push("API bind is enabled without built-in auth/TLS. Bind to 127.0.0.1 or put behind authenticated reverse proxy.".into());
+        }
+        if self.timeout.as_secs() < 3 {
+            w.push("Timeout below 3s can cause false negatives on slow networks. Use 5-10s unless lab is local.".into());
+        }
+        w
     }
 }
 
@@ -214,6 +257,7 @@ mod tests {
             decrypt_file: None,
             decrypt_output: None,
             dry_run: false,
+            fp_check: false,
         }
     }
 

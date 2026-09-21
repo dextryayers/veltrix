@@ -173,10 +173,28 @@ pub enum Commands {
     #[command(about = "Generate a wordlist from target/personal information")]
     Create(CreateArgs),
 
+    #[command(about = "Validate a TOML or JSON config file without attacking")]
+    Validate(ValidateArgs),
+
+    #[command(about = "Print shell completion script (bash, zsh, fish, powershell)")]
+    Completion(CompletionArgs),
+
     #[command(about = "Display comprehensive manual with detailed usage, examples, and option reference")]
     Man,
     #[command(about = "Alias for man — display full user manual")]
     How,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ValidateArgs {
+    #[arg(long = "config", help = "Config file to validate (TOML or JSON)", value_name = "FILE")]
+    pub config: PathBuf,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct CompletionArgs {
+    #[arg(help = "Shell: bash, zsh, fish, powershell")]
+    pub shell: String,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -326,6 +344,33 @@ pub struct Cli {
     #[arg(long = "stop-on-first", help = "Stop after first success per target", global = true)]
     pub stop_on_first: bool,
 
+    #[arg(long = "spray", help = "Spray mode: try one password across all users before next password (safer against lockout)", global = true)]
+    pub spray: bool,
+
+    #[arg(long = "single-user", help = "Single-user mode: only first username is tested with all passwords", global = true)]
+    pub single_user: bool,
+
+    #[arg(long = "resume", help = "Resume session file (checkpoint/restore)", value_name = "FILE", global = true)]
+    pub resume: Option<PathBuf>,
+
+    #[arg(long = "config", help = "Load base config from TOML or JSON file (CLI flags override file)", value_name = "FILE", global = true)]
+    pub config_file: Option<PathBuf>,
+
+    #[arg(long = "rule", help = "Password mutation rule file", value_name = "FILE", global = true)]
+    pub rule_file: Option<PathBuf>,
+
+    #[arg(long = "max-mutations", help = "Max rule mutations per password", default_value = "500", value_name = "N", global = true)]
+    pub max_mutations: usize,
+
+    #[arg(long = "checkpoint", help = "Session checkpoint interval (attempts)", default_value = "100", value_name = "N", global = true)]
+    pub checkpoint: u64,
+
+    #[arg(long = "api-bind", help = "Bind address for REST API mode (default: disabled, local only recommended)", value_name = "ADDR", global = true)]
+    pub api_bind: Option<String>,
+
+    #[arg(long = "fp-check", help = "Fingerprint check: re-verify claimed successes to eliminate false positives", global = true)]
+    pub fp_check: bool,
+
     #[arg(long = "max-password-len", help = "Truncate passwords to N characters", value_name = "N", global = true)]
     pub max_password_len: Option<usize>,
 
@@ -459,9 +504,9 @@ impl Cli {
             proxy_chain: self.proxy_chain.clone(),
             output_file: self.output.clone(),
             output_format: OutputFormat::from_str(&self.format),
-            resume_file: None,
-            config_file: None,
-            checkpoint_interval: 100,
+            resume_file: self.resume.clone(),
+            config_file: self.config_file.clone(),
+            checkpoint_interval: self.checkpoint,
             rdp_domain: args.rdp_domain.clone(),
             http_userfield: args.http_userfield.clone(),
             http_passfield: args.http_passfield.clone(),
@@ -469,26 +514,217 @@ impl Cli {
             verbose: self.verbose,
             quiet: false,
             no_banner: false,
-            single_user_mode: false,
-            spray_mode: false,
+            single_user_mode: self.single_user,
+            spray_mode: self.spray,
             stop_on_first: self.stop_on_first,
             retries: self.retries,
-            rule_file: None,
-            max_mutations: 500,
+            rule_file: self.rule_file.clone(),
+            max_mutations: self.max_mutations,
             max_password_len: self.max_password_len,
             distributed: None,
             distributed_token: None,
             distributed_name: None,
             plugins: self.plugins.clone(),
-            api_bind: None,
+            api_bind: self.api_bind.clone(),
             encrypt: self.encrypt,
             encrypt_passphrase: self.encrypt_passphrase.clone(),
             decrypt_file: self.decrypt_file.clone(),
             decrypt_output: self.decrypt_output.clone(),
             dry_run: self.dry_run,
+            fp_check: self.fp_check,
         }
     }
-}
+
+    /// Terapkan file config (TOML/JSON) dengan prioritas CLI > file > default.
+    /// Hanya field yang kosong/default di CLI yang diisi dari file.
+    pub fn apply_config_file(&self, config: &mut AttackConfig) -> Result<bool, String> {
+        let path = match self.config_file.as_ref().or(config.config_file.as_ref()) {
+            Some(p) => p.clone(),
+            None => return Ok(false),
+        };
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if ext == "toml" {
+            let fc = crate::core::config_toml::TomlConfig::load(&path)
+                .map_err(|e| format!("config {}: {}", path.display(), e))?;
+            Self::merge_toml_with_cli_priority(&fc, config, &path);
+        } else {
+            let fc = crate::core::config_loader::ConfigFile::load(&path)
+                .map_err(|e| format!("config {}: {}", path.display(), e))?;
+            Self::merge_json_with_cli_priority(&fc, config);
+        }
+        config.config_file = Some(path);
+        Ok(true)
+    }
+
+    fn merge_toml_with_cli_priority(
+        fc: &crate::core::config_toml::TomlConfig,
+        config: &mut AttackConfig,
+        path: &std::path::Path,
+    ) {
+        use std::path::PathBuf as PB;
+        if let Some(a) = fc.attack.as_ref() {
+            if config.targets.is_empty() {
+                if let Some(t) = a.targets.clone() { config.targets = t; }
+            }
+            if config.target_file.is_none() {
+                if let Some(f) = a.target_file.clone() { config.target_file = Some(PB::from(f)); }
+            }
+            if config.protocols.len() <= 1 && config.protocols.first().map(|s| s == "ssh").unwrap_or(true) {
+                // Biarkan protokol CLI (single) menang; file hanya dipakai jika CLI masih default implisit.
+                // Untuk run_attack protokol selalu di-set dari subcommand, jadi jangan timpa di sini.
+            }
+            if config.ports.is_empty() {
+                if let Some(p) = a.ports.clone() { config.ports = p; }
+            }
+        }
+        if let Some(c) = fc.credentials.as_ref() {
+            if config.users.is_empty() {
+                if let Some(u) = c.users.clone() { config.users = u; }
+            }
+            if config.passwords.is_empty() {
+                if let Some(p) = c.passwords.clone() { config.passwords = p; }
+            }
+            if config.user_file.is_none() {
+                if let Some(f) = c.user_file.clone() { config.user_file = Some(PB::from(f)); }
+            }
+            if config.password_file.is_none() {
+                if let Some(f) = c.password_file.clone() { config.password_file = Some(PB::from(f)); }
+            }
+            if config.combo_file.is_none() {
+                if let Some(f) = c.combo_file.clone() { config.combo_file = Some(PB::from(f)); }
+            }
+            if !config.single_user_mode {
+                if let Some(v) = c.single_user { config.single_user_mode = v; }
+            }
+            if !config.spray_mode {
+                if let Some(v) = c.spray { config.spray_mode = v; }
+            }
+            if config.max_password_len.is_none() {
+                if let Some(n) = c.max_password_len { config.max_password_len = Some(n); }
+            }
+            if config.rdp_domain.is_none() {
+                if let Some(v) = c.rdp_domain.clone() { config.rdp_domain = Some(v); }
+            }
+            if config.http_userfield.is_none() {
+                if let Some(v) = c.http_userfield.clone() { config.http_userfield = Some(v); }
+            }
+            if config.http_passfield.is_none() {
+                if let Some(v) = c.http_passfield.clone() { config.http_passfield = Some(v); }
+            }
+            if config.http_success.is_none() {
+                if let Some(v) = c.http_success.clone() { config.http_success = Some(v); }
+            }
+        }
+        if let Some(h) = fc.hybrid.as_ref() {
+            if config.rule_file.is_none() {
+                if let Some(f) = h.rules.clone() { config.rule_file = Some(PB::from(f)); }
+            }
+            if config.max_mutations == 500 {
+                if let Some(n) = h.max_mutations { config.max_mutations = n; }
+            }
+        }
+        if let Some(p) = fc.performance.as_ref() {
+            // Performance: CLI selalu menang karena punya default eksplisit.
+            // File hanya dipakai jika user mengubah default file dari nilai umum.
+            // Dokumentasikan sebagai CLI > file untuk field ini.
+            let _ = (p, path);
+        }
+        if let Some(p) = fc.proxy.as_ref() {
+            if config.proxy.is_none() {
+                if let Some(s) = p.proxy.clone() { config.proxy = Some(s); }
+            }
+            if config.proxy_file.is_none() {
+                if let Some(f) = p.proxy_file.clone() { config.proxy_file = Some(PB::from(f)); }
+            }
+            if config.proxy_chain.is_none() {
+                if let Some(s) = p.proxy_chain.clone() { config.proxy_chain = Some(s); }
+            }
+        }
+        if let Some(o) = fc.output.as_ref() {
+            if config.output_file.is_none() {
+                if let Some(f) = o.file.clone() { config.output_file = Some(PB::from(f)); }
+            }
+            if config.resume_file.is_none() {
+                if let Some(f) = o.resume.clone() { config.resume_file = Some(PB::from(f)); }
+            }
+        }
+        if let Some(b) = fc.behavior.as_ref() {
+            if !config.stop_on_first {
+                if let Some(v) = b.stop_on_first { config.stop_on_first = v; }
+            }
+        }
+    }
+
+    fn merge_json_with_cli_priority(
+        fc: &crate::core::config_loader::ConfigFile,
+        config: &mut AttackConfig,
+    ) {
+        use std::path::PathBuf as PB;
+        if config.targets.is_empty() && !fc.attack.targets.is_empty() {
+            config.targets = fc.attack.targets.clone();
+        }
+        if config.target_file.is_none() {
+            if let Some(ref f) = fc.attack.target_file { config.target_file = Some(PB::from(f)); }
+        }
+        if config.ports.is_empty() && !fc.attack.ports.is_empty() {
+            config.ports = fc.attack.ports.clone();
+        }
+        if config.users.is_empty() && !fc.credentials.users.is_empty() {
+            config.users = fc.credentials.users.clone();
+        }
+        if config.passwords.is_empty() && !fc.credentials.passwords.is_empty() {
+            config.passwords = fc.credentials.passwords.clone();
+        }
+        if config.user_file.is_none() {
+            if let Some(ref f) = fc.credentials.user_file { config.user_file = Some(PB::from(f)); }
+        }
+        if config.password_file.is_none() {
+            if let Some(ref f) = fc.credentials.password_file { config.password_file = Some(PB::from(f)); }
+        }
+        if config.combo_file.is_none() {
+            if let Some(ref f) = fc.credentials.combo_file { config.combo_file = Some(PB::from(f)); }
+        }
+        if !config.single_user_mode && fc.credentials.single_user {
+            config.single_user_mode = true;
+        }
+        if !config.spray_mode && fc.credentials.spray {
+            config.spray_mode = true;
+        }
+        if config.max_password_len.is_none() {
+            if let Some(n) = fc.credentials.max_password_len { config.max_password_len = Some(n); }
+        }
+        if config.rdp_domain.is_none() {
+            if let Some(ref v) = fc.credentials.rdp_domain { config.rdp_domain = Some(v.clone()); }
+        }
+        if config.rule_file.is_none() {
+            if let Some(ref f) = fc.hybrid.rules { config.rule_file = Some(PB::from(f)); }
+        }
+        if config.max_mutations == 500 {
+            if let Some(n) = fc.hybrid.max_mutations { config.max_mutations = n; }
+        }
+        if config.proxy.is_none() {
+            if let Some(ref s) = fc.proxy.proxy { config.proxy = Some(s.clone()); }
+        }
+        if config.proxy_file.is_none() {
+            if let Some(ref f) = fc.proxy.proxy_file { config.proxy_file = Some(PB::from(f)); }
+        }
+        if config.proxy_chain.is_none() {
+            if let Some(ref s) = fc.proxy.proxy_chain { config.proxy_chain = Some(s.clone()); }
+        }
+        if config.output_file.is_none() {
+            if let Some(ref f) = fc.output.file { config.output_file = Some(PB::from(f)); }
+        }
+        if config.resume_file.is_none() {
+            if let Some(ref f) = fc.output.resume { config.resume_file = Some(PB::from(f)); }
+        }
+        if !config.stop_on_first {
+            if let Some(v) = fc.behavior.stop_on_first { config.stop_on_first = v; }
+        }
+    }
 
 pub fn port_to_protocol(port: u16) -> Option<&'static str> {
     match port {
@@ -541,9 +777,26 @@ pub fn print_banner() {
 }
 
 pub fn print_manual() {
-    let manual = r#"
+    // F2.5: header selalu sinkron dengan versi Cargo dan jumlah protokol registry.
+    let version = env!("CARGO_PKG_VERSION");
+    let proto_count = crate::protocols::list_protocols().len();
+    println!(
+        "{}",
+        format!(
+            "VELTRIX v{} COMPLETE USER MANUAL ({} protocols registered)",
+            version, proto_count
+        )
+        .green()
+        .bold()
+    );
+    println!(
+        "{}",
+        "Generated header. Body below is the maintained manual; use --help for authoritative flags.".dimmed()
+    );
+    println!();
+    let manual = r#"Original manual body follows.
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║                       VELTRIX v1.2 — COMPLETE USER MANUAL                   ║
+║                       VELTRIX — COMPLETE USER MANUAL                   ║
 ║               Multi-Protocol Brute Force & Security Auditing Toolkit         ║
 ║                               By AniipID                                    ║
 ╚══════════════════════════════════════════════════════════════════════════════╝

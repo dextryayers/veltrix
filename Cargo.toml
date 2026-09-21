@@ -14,6 +14,7 @@ strip = "symbols"
 [dependencies]
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }

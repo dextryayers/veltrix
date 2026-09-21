@@ -11,12 +11,25 @@ use std::path::PathBuf;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use cli::{print_banner, print_protocols, print_manual, Cli, Commands, ProtocolArgs, CreateArgs};
 use core::attack::AttackOrchestrator;
 use crate::utils::wordlist_gen::{WordlistConfig, generate_wordlist};
 use colored::Colorize;
 
+
+/// Exit codes standar v2:
+/// 0 = sukses ada temuan, 1 = tidak ada temuan atau runtime gagal,
+/// 2 = config invalid, 130 = interrupted paksa.
+pub const EXIT_FOUND: i32 = 0;
+pub const EXIT_NOT_FOUND: i32 = 1;
+pub const EXIT_CONFIG: i32 = 2;
+pub const EXIT_INTERRUPTED: i32 = 130;
+
+pub fn exit_config(msg: &str) -> ! {
+    eprintln!("Config error: {}", msg);
+    std::process::exit(EXIT_CONFIG);
+}
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 8)]
 async fn main() {
@@ -157,7 +170,7 @@ async fn main() {
             r.store(false, Ordering::SeqCst);
         } else {
             eprintln!("\n[!] Forced exit.");
-            std::process::exit(1);
+            std::process::exit(EXIT_INTERRUPTED);
         }
     }).expect("Failed to set SIGINT handler");
 
@@ -212,6 +225,8 @@ async fn main() {
         Some(Commands::Memcached(ref a)) => run_attack(&cli, "memcached", a, running).await,
         Some(Commands::Man) | Some(Commands::How) => print_manual(),
         Some(Commands::Create(ref a)) => run_create(a).await,
+        Some(Commands::Validate(ref a)) => run_validate(a),
+        Some(Commands::Completion(ref a)) => run_completion(a),
         None => {
             print_banner();
             println!("{}", "Use --help or -h for usage information.".dimmed());
@@ -243,10 +258,7 @@ async fn run_scan(cli: &Cli, args: &cli::ScanPortsArgs, running: Arc<AtomicBool>
         Some("common") | None => crate::scanner::scanner::common_ports(),
         Some(spec) => match crate::scanner::scanner::parse_port_spec(spec) {
             Ok(p) => p,
-            Err(e) => {
-                eprintln!("Invalid port specification: {}", e);
-                std::process::exit(1);
-            }
+            Err(e) => exit_config(&format!("invalid port specification: {}", e)),
         },
     };
 
@@ -328,14 +340,28 @@ async fn run_attack(cli: &Cli, protocol: &str, args: &ProtocolArgs, running: Arc
         }
     }
 
-    let config = cli.build_attack_config(protocol, args);
+    let mut config = cli.build_attack_config(protocol, args);
+
+    // F2.2: file config dengan prioritas CLI > file > default.
+    if cli.config_file.is_some() {
+        if let Err(e) = cli.apply_config_file(&mut config) {
+            exit_config(&e);
+        }
+        log::info!("Loaded base config from file (CLI flags take priority)");
+    }
+
+    // F2.3: validasi keras + peringatan risiko lockout.
+    if let Err(e) = config.validate() {
+        exit_config(&e.to_string());
+    }
+    for w in config.risk_warnings() {
+        eprintln!("warning: {}", w);
+        log::warn!("{}", w);
+    }
 
     let mut orchestrator = match AttackOrchestrator::new(config, running).await {
         Ok(o) => o,
-        Err(e) => {
-            eprintln!("Failed to initialize attack: {}", e);
-            std::process::exit(1);
-        }
+        Err(e) => exit_config(&e.to_string()),
     };
 
     let summary = orchestrator.run().await;
@@ -345,9 +371,9 @@ async fn run_attack(cli: &Cli, protocol: &str, args: &ProtocolArgs, running: Arc
     }
 
     if summary.successes > 0 {
-        std::process::exit(0);
+        std::process::exit(EXIT_FOUND);
     } else {
-        std::process::exit(1);
+        std::process::exit(EXIT_NOT_FOUND);
     }
 }
 
@@ -422,5 +448,116 @@ async fn run_create(args: &CreateArgs) {
             }
             eprintln!("[+] Generated {} candidates", words.len());
         }
+    }
+}
+
+fn run_validate(args: &cli::ValidateArgs) {
+    let ext = args
+        .config
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let loader = Cli {
+        config_file: Some(args.config.clone()),
+        ..default_cli_for_validate()
+    };
+    let mut base = default_cli_for_validate().build_attack_config(
+        "ssh",
+        &ProtocolArgs {
+            rdp_domain: None,
+            http_userfield: None,
+            http_passfield: None,
+            http_success: None,
+        },
+    );
+    base.protocols.clear();
+    if let Err(e) = loader.apply_config_file(&mut base) {
+        exit_config(&e);
+    }
+    // Kembalikan protokol placeholder jika file tidak menyebutkannya,
+    // agar validate fokus ke struktur file, bukan ke protokol CLI.
+    if base.protocols.is_empty() {
+        base.protocols = vec!["ssh".into()];
+    }
+    match base.validate() {
+        Ok(()) => {
+            println!("Config {} is valid ({} format).", args.config.display(), if ext == "toml" { "TOML" } else { "JSON" });
+            for w in base.risk_warnings() {
+                println!("warning: {}", w);
+            }
+        }
+        Err(e) => exit_config(&e.to_string()),
+    }
+}
+
+fn default_cli_for_validate() -> Cli {
+    Cli {
+        targets: vec![],
+        target_file: None,
+        ports: vec![],
+        list_protocols: false,
+        users: vec![],
+        user_file: None,
+        passwords: vec![],
+        password_file: None,
+        combo_file: None,
+        threads: 10,
+        timeout: 10,
+        delay: 0,
+        rate_limit: None,
+        retries: 2,
+        stop_on_first: false,
+        spray: false,
+        single_user: false,
+        resume: None,
+        config_file: None,
+        rule_file: None,
+        max_mutations: 500,
+        checkpoint: 100,
+        api_bind: None,
+        fp_check: false,
+        max_password_len: None,
+        proxy: None,
+        proxy_file: None,
+        proxy_chain: None,
+        output: None,
+        format: "plain".into(),
+        plugins: vec![],
+        list_plugin: false,
+        encrypt: false,
+        encrypt_passphrase: None,
+        decrypt_file: None,
+        decrypt_output: None,
+        gen_wordlist: false,
+        wl_name: None,
+        wl_company: None,
+        wl_dob: None,
+        wl_keywords: vec![],
+        wl_min_len: 4,
+        wl_max_len: 32,
+        wl_no_leet: false,
+        wl_output: None,
+        ml_train: None,
+        ml_generate: None,
+        ml_order: 3,
+        ml_max_len: 24,
+        ml_score: None,
+        ml_output: None,
+        verbose: 0,
+        dry_run: false,
+    }
+}
+
+fn run_completion(args: &cli::CompletionArgs) {
+    use clap_complete::{generate, shells::{Bash, Fish, PowerShell, Zsh}};
+    use std::io::stdout;
+    let mut cmd = Cli::command();
+    match args.shell.to_lowercase().as_str() {
+        "bash" => generate(Bash, &mut cmd, "veltrix", &mut stdout()),
+        "zsh" => generate(Zsh, &mut cmd, "veltrix", &mut stdout()),
+        "fish" => generate(Fish, &mut cmd, "veltrix", &mut stdout()),
+        "powershell" | "pwsh" => generate(PowerShell, &mut cmd, "veltrix", &mut stdout()),
+        other => exit_config(&format!("unknown shell '{}'. Use bash, zsh, fish, or powershell.", other)),
     }
 }
