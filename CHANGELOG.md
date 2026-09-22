@@ -1,5 +1,22 @@
 # Changelog Veltrix
 
+## v2.0.1 (2026-09-22) — CLI polish + password tampil penuh default
+
+- **Password tampil penuh default** saat attack (console, plain/csv/html,
+  auto-report): `root:admin123` bukan `root:a***`. Mask hanya bila
+  `--hide-secrets` (alias `--mask`). Flag lama `--show-secrets` tetap
+  diterima (no-op, hidden). API (`serve`) tetap masked default + audit.
+- **CLI help diseksi 1–13**: Target, Credentials, Performance, Hybrid Rules,
+  Session & Config, Attack Control, Stealth & Evasion, Proxy & Anonymity,
+  Output & Reporting, Plugins & Encryption, Wordlist Generator, ML
+  Prediction, Verbosity — berlaku di `--help` dan tiap subcommand.
+- **Flag baru**: `-q/--quiet` (successes only), `-w` short untuk `--password`.
+- **`--api-bind` didepresiasi** (tak berpengaruh di attack; pakai `serve`).
+- **`how` jadi alias `man`**.
+- **Fix registry drift**: `consul` + `cvs` hilang dari `list_protocols()`
+  (man header klaim 45) → 47 sinkron + regression test.
+- Klaim "47 protokol" diselaraskan ke registry sebagai source of truth.
+
 ## v2.0.0 (2026-09-22) — Fase 8 + 9: Wordlist/ML + QA/Rilis + Anonimitas
 
 ### Fase 8 — Wordlist, Rules, ML Pipeline
