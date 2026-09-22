@@ -77,6 +77,9 @@ fn ip_from_u32(val: u32) -> Ipv4Addr {
     Ipv4Addr::from(val)
 }
 
+/// Batas ekspansi per spec agar `-t 0.0.0.0/0` tidak OOM (F9.2 fuzz finding).
+pub const MAX_EXPAND_PER_SPEC: usize = 65_536;
+
 fn expand_cidr(network: Ipv4Addr, prefix: u8, port: Option<u16>) -> Vec<(String, Option<u16>)> {
     let net_u32 = u32_from_ip(network);
     let mask = if prefix == 0 { 0 } else { !0u32 << (32 - prefix) };
@@ -88,12 +91,23 @@ fn expand_cidr(network: Ipv4Addr, prefix: u8, port: Option<u16>) -> Vec<(String,
     }
 
     let total = 2u64.pow(host_bits as u32);
-    let mut hosts = Vec::with_capacity(total as usize - 2);
+    // Cap: /16 penuh = 65534 host, lebih besar dari itu dipotong + warning.
+    let usable = total.saturating_sub(2).min(MAX_EXPAND_PER_SPEC as u64);
+    if total.saturating_sub(2) > usable {
+        log::warn!(
+            "CIDR {}/{} expands to {} hosts, truncated to {} (split range or raise MAX_EXPAND_PER_SPEC)",
+            network, prefix, total.saturating_sub(2), usable
+        );
+    }
+    let mut hosts = Vec::with_capacity(usable as usize);
 
     let start = if prefix < 31 { 1 } else { 0 };
     let end = if prefix < 31 { total - 1 } else { total };
 
     for i in start..end {
+        if hosts.len() >= usable as usize {
+            break;
+        }
         let ip = ip_from_u32(network_start | (i as u32));
         hosts.push((ip.to_string(), port));
     }
@@ -106,10 +120,19 @@ fn expand_range(start: Ipv4Addr, end: Ipv4Addr, port: Option<u16>) -> Vec<(Strin
     let end_u32 = u32_from_ip(end);
     let count = (end_u32 - start_u32 + 1) as usize;
 
-    let mut hosts = Vec::with_capacity(count);
+    // Cap yang sama dengan CIDR (F9.2).
+    let take = count.min(MAX_EXPAND_PER_SPEC);
+    if count > take {
+        log::warn!("Range {}-{} spans {} hosts, truncated to {}", start, end, count, take);
+    }
+    let mut hosts = Vec::with_capacity(take);
     for val in start_u32..=end_u32 {
+        if hosts.len() >= take {
+            break;
+        }
         hosts.push((ip_from_u32(val).to_string(), port));
     }
+
     hosts
 }
 
@@ -276,6 +299,16 @@ mod tests {
     }
 
     #[test]
+    fn test_huge_cidr_truncated_no_oom() {
+        // Regresi F9.2: /0 tidak boleh alokasi 4 miliar entri.
+        let spec = TargetSpec::parse("0.0.0.0/0").unwrap();
+        let hosts = spec.expand();
+        assert_eq!(hosts.len(), MAX_EXPAND_PER_SPEC);
+        let spec = TargetSpec::parse("10.0.0.0/16").unwrap();
+        assert_eq!(spec.expand().len(), 65534);
+    }
+
+    #[test]
     fn test_spec_is_lab() {
         assert!(spec_is_lab("192.168.1.1"));
         assert!(spec_is_lab("10.0.0.5:3389"));
@@ -288,5 +321,57 @@ mod tests {
         assert!(!spec_is_lab("1.1.1.1:443"));
         assert!(!spec_is_lab("example.com"));
         assert!(!spec_is_lab("8.8.8.0/24"));
+    }
+}
+
+#[cfg(test)]
+mod fuzz_tests {
+    use super::*;
+
+    /// Xorshift64 seeded: deterministik, tanpa dep baru.
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            x
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+    }
+
+    const PIECES: &[&str] = &[
+        "192", "168", "1", "10", "0", "255", "256", "999", ".", "/", "-", ":", " ",
+        "24", "32", "33", "abc", "::1", "[", "]", "\n", "\t", "99999", "0", "22",
+    ];
+
+    #[test]
+    fn fuzz_target_spec_never_panics() {
+        let mut rng = Rng(0xC10D);
+        for _ in 0..5000 {
+            let n = 1 + rng.below(6);
+            let mut s = String::new();
+            for _ in 0..n {
+                s.push_str(PIECES[rng.below(PIECES.len())]);
+            }
+            // Invarian: tidak panic; hasil Ok harus expand tanpa panic.
+            if let Ok(spec) = TargetSpec::parse(&s) {
+                let expanded = spec.expand();
+                assert!(expanded.len() <= 100_000, "expansion blowup on {:?}", s);
+            }
+        }
+    }
+
+    #[test]
+    fn fuzz_valid_specs_roundtrip() {
+        // Input valid harus selalu parse dan expand konsisten.
+        for spec in ["10.0.0.1", "10.0.0.1:22", "10.0.0.0/30", "10.0.0.1-10.0.0.3"] {
+            let parsed = TargetSpec::parse(spec).expect("valid spec");
+            assert!(!parsed.expand().is_empty());
+        }
     }
 }

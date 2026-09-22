@@ -344,3 +344,59 @@ mod tests {
         assert!(!should_skip_user(&c));
     }
 }
+
+#[cfg(test)]
+mod fuzz_tests {
+    use super::*;
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            x
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+    }
+
+    const WORDS: &[&str] = &[
+        "530", "535", "421", "access denied", "ACCOUNT LOCKED", "rate limit",
+        "timeout", "refused", "530 account", "user", "login", "NO", "-ERR",
+        "1045", "28P01", "", " ", "HTTP 500", "throttl", "too many",
+        "\n", ":", "Ticks", "dns", "shutdown",
+    ];
+
+    #[test]
+    fn fuzz_classify_never_panics() {
+        let mut rng = Rng(0xC1A551);
+        for _ in 0..5000 {
+            let n = rng.below(5);
+            let mut s = String::new();
+            for i in 0..n {
+                if i > 0 {
+                    s.push(' ');
+                }
+                s.push_str(WORDS[rng.below(WORDS.len())]);
+            }
+            let c = classify_error(Some(&s), false);
+            // Kategori selalu salah satu varian valid.
+            let _ = format!("{:?}", c.category);
+            let ok = classify_error(None, true);
+            assert_eq!(ok.category, ResponseCategory::Success);
+        }
+    }
+
+    #[test]
+    fn fuzz_backoff_bounded() {
+        let mut rng = Rng(0x8AC4);
+        for _ in 0..1000 {
+            let b = compute_backoff(rng.below(100) as u32);
+            assert!(b <= Duration::from_millis(30_000));
+        }
+    }
+}

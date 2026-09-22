@@ -1,5 +1,20 @@
 use std::path::Path;
 
+/// Rule engine v2 (F8.1).
+///
+/// Sintaks per baris (token dipisah spasi, `#` mulai komentar):
+/// - `$n`   append angka 0..=n, mis. `$99` -> pass0..pass99
+/// - `^n`   prepend angka 0..=n
+/// - `@str` append string literal, mis. `@123`, `@!`
+/// - `!str` prepend string literal
+/// - `~m`   case: 0 lower, 1 UPPER, 2 Title
+/// - `&a:b` leet: ganti char a menjadi b
+/// - `D`    duplicate: kata + kata (pass -> passpass)
+/// - `R`    reverse: balik kata (pass -> ssap)
+/// - `Tn`   truncate ke n char pertama (pass123 -> pass, dengan T4)
+///
+/// Ekspansi dibatasi `max_mutations` global (lihat apply_rules) dan
+/// `dry_count` memberi estimasi akurat sebelum eksekusi.
 #[derive(Debug, Clone)]
 pub enum RuleOp {
     AppendNumber(u64),
@@ -8,6 +23,9 @@ pub enum RuleOp {
     PrependString(String),
     Capitalize(u8),
     LeetSpeak { from: char, to: char },
+    Duplicate,
+    Reverse,
+    Truncate(usize),
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +78,24 @@ fn apply_op(words: &[String], op: &RuleOp) -> Vec<String> {
         RuleOp::LeetSpeak { from, to } => {
             words.iter().map(|w| w.replace(*from, to.to_string().as_str())).collect()
         }
+        RuleOp::Duplicate => {
+            words.iter().map(|w| format!("{}{}", w, w)).collect()
+        }
+        RuleOp::Reverse => {
+            words.iter().map(|w| w.chars().rev().collect()).collect()
+        }
+        RuleOp::Truncate(n) => {
+            words.iter().map(|w| w.chars().take(*n).collect()).collect()
+        }
+    }
+}
+
+/// Faktor ekspansi satu op per kata input (untuk dry count).
+/// Append/PrependNumber(n) -> n+1, lainnya -> 1.
+pub fn op_factor(op: &RuleOp) -> u64 {
+    match op {
+        RuleOp::AppendNumber(n) | RuleOp::PrependNumber(n) => n.saturating_add(1),
+        _ => 1,
     }
 }
 
@@ -83,15 +119,15 @@ pub fn parse_rule_line(line: &str) -> Option<Rule> {
 }
 
 fn parse_token(token: &str) -> Option<RuleOp> {
-    if token.len() < 2 {
+    if token.is_empty() {
         return None;
     }
     let (op_type, arg) = token.split_at(1);
     match op_type {
         "$" => arg.parse::<u64>().ok().map(RuleOp::AppendNumber),
         "^" => arg.parse::<u64>().ok().map(RuleOp::PrependNumber),
-        "@" => Some(RuleOp::AppendString(arg.to_string())),
-        "!" => Some(RuleOp::PrependString(arg.to_string())),
+        "@" if !arg.is_empty() => Some(RuleOp::AppendString(arg.to_string())),
+        "!" if !arg.is_empty() => Some(RuleOp::PrependString(arg.to_string())),
         "~" => arg.parse::<u8>().ok().map(RuleOp::Capitalize),
         "&" => {
             let parts: Vec<&str> = arg.splitn(2, ':').collect();
@@ -103,6 +139,9 @@ fn parse_token(token: &str) -> Option<RuleOp> {
                 None
             }
         }
+        "D" if arg.is_empty() => Some(RuleOp::Duplicate),
+        "R" if arg.is_empty() => Some(RuleOp::Reverse),
+        "T" => arg.parse::<usize>().ok().filter(|&n| n > 0).map(RuleOp::Truncate),
         _ => None,
     }
 }
@@ -138,6 +177,21 @@ pub fn apply_rules(base_words: &[String], rules: &[Rule], max_mutations: usize) 
         }
     }
     result
+}
+
+/// Estimasi akurat jumlah mutasi TANPA ekspansi (F8.1 dry count).
+/// Mengembalikan min(estimasi eksak, max_mutations) per aturan berantai,
+/// sama persis dengan batas yang dipakai apply_rules.
+pub fn dry_count_rules(base_count: usize, rules: &[Rule], max_mutations: usize) -> usize {
+    let mut count = base_count as u64;
+    for rule in rules {
+        let factor: u64 = rule.ops.iter().map(op_factor).product();
+        count = count.saturating_mul(factor).min(max_mutations as u64);
+        if count >= max_mutations as u64 {
+            break;
+        }
+    }
+    count as usize
 }
 
 #[cfg(test)]
@@ -229,6 +283,111 @@ mod tests {
                 assert_eq!(to, '4');
             }
             _ => panic!("Expected LeetSpeak"),
+        }
+    }
+
+    #[test]
+    fn test_new_ops_duplicate_reverse_truncate() {
+        let r = Rule { ops: vec![RuleOp::Duplicate] };
+        assert_eq!(r.apply("pass"), vec!["passpass"]);
+        let r = Rule { ops: vec![RuleOp::Reverse] };
+        assert_eq!(r.apply("pass"), vec!["ssap"]);
+        let r = Rule { ops: vec![RuleOp::Truncate(4)] };
+        assert_eq!(r.apply("password"), vec!["pass"]);
+    }
+
+    #[test]
+    fn test_parse_new_tokens() {
+        assert!(matches!(parse_token("D"), Some(RuleOp::Duplicate)));
+        assert!(matches!(parse_token("R"), Some(RuleOp::Reverse)));
+        assert!(matches!(parse_token("T4"), Some(RuleOp::Truncate(4))));
+        assert!(parse_token("T0").is_none());
+        assert!(parse_token("@").is_none());
+        assert!(parse_token("$").is_none());
+        assert!(parse_token("Z9").is_none());
+        let r = parse_rule_line("~2 @123 D").unwrap();
+        assert_eq!(r.ops.len(), 3);
+    }
+
+    #[test]
+    fn test_dry_count_matches_apply() {
+        let rules = vec![
+            parse_rule_line("$9").unwrap(),   // x10
+            parse_rule_line("@!").unwrap(),   // x1
+            parse_rule_line("D").unwrap(),    // x1
+        ];
+        let base = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let est = dry_count_rules(base.len(), &rules, 10_000);
+        let actual = apply_rules(&base, &rules, 10_000).len();
+        assert_eq!(est, actual);
+        assert_eq!(est, 30);
+    }
+
+    #[test]
+    fn test_dry_count_respects_cap() {
+        let rules = vec![parse_rule_line("$9999").unwrap()];
+        let base = vec!["a".to_string()];
+        assert_eq!(dry_count_rules(base.len(), &rules, 500), 500);
+        assert_eq!(apply_rules(&base, &rules, 500).len(), 500);
+    }
+
+    #[test]
+    fn test_dry_count_empty() {
+        assert_eq!(dry_count_rules(0, &[], 500), 0);
+        assert_eq!(dry_count_rules(10, &[], 500), 10);
+    }
+}
+
+#[cfg(test)]
+mod fuzz_tests {
+    use super::*;
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            x
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+    }
+
+    const TOKENS: &[&str] = &["$", "^", "@", "!", "~", "&", "D", "R", "T", "0", "1", "9", "abc", ":", " ", "#", "4", "123"];
+
+    #[test]
+    fn fuzz_rule_parse_never_panics() {
+        let mut rng = Rng(0x601E);
+        for _ in 0..5000 {
+            let n = 1 + rng.below(5);
+            let mut s = String::new();
+            for i in 0..n {
+                if i > 0 {
+                    s.push(' ');
+                }
+                s.push_str(TOKENS[rng.below(TOKENS.len())]);
+            }
+            // Token angka kecil saja agar apply() tetap murah di test ini.
+            let _ = parse_rule_line(&s);
+        }
+    }
+
+    #[test]
+    fn fuzz_rule_apply_bounded() {
+        // Aturan dari token kecil: ekspansi harus eksak sama dengan dry count.
+        let mut rng = Rng(0xA991);
+        for _ in 0..500 {
+            let line = format!("${} @{}{}", rng.below(4), "x", rng.below(3));
+            if let Some(rule) = parse_rule_line(&line) {
+                let base = vec!["pw".to_string()];
+                let actual = rule.apply(&base[0]).len();
+                let est = dry_count_rules(1, &[rule], usize::MAX / 2);
+                assert_eq!(actual, est, "dry mismatch on {:?}", line);
+            }
         }
     }
 }

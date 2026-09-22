@@ -95,4 +95,119 @@ impl MarkovChain {
         }
         -log_prob
     }
+
+    /// F8.3: ranking probable-first. Skor rendah = mirip distribusi training =
+    /// dicoba lebih dulu. Deterministik (tanpa RNG) sehingga reproducible.
+    /// Mengembalikan (password, skor) terurut menaik; `top` memotong hasil.
+    pub fn rank(&self, passwords: &[String], top: Option<usize>) -> Vec<(String, f64)> {
+        let mut scored: Vec<(String, f64)> = passwords
+            .iter()
+            .map(|p| (p.clone(), self.complexity_score(p)))
+            .collect();
+        scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        if let Some(n) = top {
+            scored.truncate(n);
+        }
+        scored
+    }
+
+    /// F8.4: precision@K deterministik. `ranked` harus sudah terurut oleh rank(),
+    /// `relevant` adalah himpunan password yang dianggap hit (mis. held-out).
+    pub fn precision_at_k(ranked: &[(String, f64)], relevant: &std::collections::HashSet<String>, k: usize) -> f64 {
+        if k == 0 || ranked.is_empty() {
+            return 0.0;
+        }
+        let n = k.min(ranked.len());
+        let hits = ranked.iter().take(n).filter(|(p, _)| relevant.contains(p)).count();
+        hits as f64 / n as f64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn train_family() -> MarkovChain {
+        // Keluarga "adminNN": pola digit-akhir yang kuat.
+        let train: Vec<String> = (0..50).map(|i| format!("admin{:02}", i)).collect();
+        let mut mc = MarkovChain::new(3);
+        mc.train(&train);
+        mc
+    }
+
+    #[test]
+    fn rank_puts_family_first() {
+        let mc = train_family();
+        let candidates: Vec<String> = vec![
+            "xqzt!kvv".into(), "admin07".into(), "zzz#qqq".into(), "admin42".into(),
+        ];
+        let ranked = mc.rank(&candidates, None);
+        assert_eq!(ranked.len(), 4);
+        // Skor terurut menaik.
+        for w in ranked.windows(2) {
+            assert!(w[0].1 <= w[1].1);
+        }
+        // Anggota keluarga di 2 teratas.
+        let top2: Vec<&str> = ranked.iter().take(2).map(|(p, _)| p.as_str()).collect();
+        assert!(top2.contains(&"admin07"));
+        assert!(top2.contains(&"admin42"));
+    }
+
+    #[test]
+    fn rank_top_truncates() {
+        let mc = train_family();
+        let cands: Vec<String> = (0..100).map(|i| format!("cand{}", i)).collect();
+        assert_eq!(mc.rank(&cands, Some(10)).len(), 10);
+        assert_eq!(mc.rank(&cands, None).len(), 100);
+    }
+
+    #[test]
+    fn precision_at_k_family_vs_junk() {
+        let mc = train_family();
+        // 10 held-out keluarga + 90 junk acak deterministik.
+        let mut candidates: Vec<String> =
+            (50..60).map(|i| format!("admin{:02}", i)).collect();
+        let mut seed: u64 = 0x12345678;
+        let mut next_rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for _ in 0..90 {
+            let s: String = (0..8)
+                .map(|_| (b'a' + (next_rnd() % 26) as u8) as char)
+                .collect();
+            candidates.push(s);
+        }
+        // Kocok deterministik agar urutan input tidak membantu.
+        for i in (1..candidates.len()).rev() {
+            let j = (next_rnd() as usize) % (i + 1);
+            candidates.swap(i, j);
+        }
+        let relevant: HashSet<String> =
+            (50..60).map(|i| format!("admin{:02}", i)).collect();
+        let ranked = mc.rank(&candidates, None);
+        let p10 = MarkovChain::precision_at_k(&ranked, &relevant, 10);
+        let p20 = MarkovChain::precision_at_k(&ranked, &relevant, 20);
+        // Keluarga harus mendominasi puncak ranking.
+        assert!(p10 >= 0.8, "precision@10 = {}", p10);
+        assert!(p20 >= 0.4, "precision@20 = {}", p20);
+    }
+
+    #[test]
+    fn precision_at_k_edge_cases() {
+        let empty: Vec<(String, f64)> = vec![];
+        let rel: HashSet<String> = HashSet::new();
+        assert_eq!(MarkovChain::precision_at_k(&empty, &rel, 10), 0.0);
+        assert_eq!(MarkovChain::precision_at_k(&[("a".into(), 1.0)], &rel, 0), 0.0);
+    }
+
+    #[test]
+    fn complexity_score_deterministic() {
+        let mc = train_family();
+        assert_eq!(mc.complexity_score("admin01"), mc.complexity_score("admin01"));
+        assert!(mc.complexity_score("admin01") < mc.complexity_score("xqzt!kvv9"));
+    }
 }

@@ -188,6 +188,9 @@ pub enum Commands {
     #[command(about = "Generate a wordlist from target/personal information")]
     Create(CreateArgs),
 
+    #[command(about = "Wordlist utilities: rank candidates probable-first with a Markov model")]
+    Wordlist(WordlistArgs),
+
     #[command(about = "Validate a TOML or JSON config file without attacking")]
     Validate(ValidateArgs),
 
@@ -207,6 +210,39 @@ pub enum Commands {
     Man,
     #[command(about = "Alias for man — display full user manual")]
     How,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum WordlistCommand {
+    #[command(about = "Rank candidates probable-first using a Markov model trained on a wordlist")]
+    Rank(RankArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct WordlistArgs {
+    #[command(subcommand)]
+    pub command: WordlistCommand,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct RankArgs {
+    #[arg(long = "input", help = "Candidate passwords file (one per line)", value_name = "FILE")]
+    pub input: PathBuf,
+
+    #[arg(long = "model", help = "Training wordlist file for the Markov model (one per line). Defaults to --input itself", value_name = "FILE")]
+    pub model: Option<PathBuf>,
+
+    #[arg(long = "order", help = "Markov chain order", value_name = "N", default_value = "3")]
+    pub order: usize,
+
+    #[arg(long = "top", help = "Keep only top N candidates (0 = all)", value_name = "N", default_value = "10000")]
+    pub top: usize,
+
+    #[arg(long = "min-score", help = "Drop candidates with score above this (lower = more probable)", value_name = "F")]
+    pub min_score: Option<f64>,
+
+    #[arg(short = 'o', long = "output", help = "Output file (default: stdout)", value_name = "FILE")]
+    pub output: Option<PathBuf>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -300,6 +336,15 @@ pub struct CreateArgs {
 
     #[arg(long = "no-leet", help = "Disable leet speak variations")]
     pub no_leet: bool,
+
+    #[arg(long = "leet-level", help = "Leet depth 0-3 (default 2)", value_name = "N", default_value = "2")]
+    pub leet_level: u8,
+
+    #[arg(long = "no-seasons", help = "Disable season bases")]
+    pub no_seasons: bool,
+
+    #[arg(long = "no-keyboard", help = "Disable keyboard-walk bases")]
+    pub no_keyboard: bool,
 
     #[arg(short = 'F', long = "filename", help = "Custom filename (without extension) inside wordlists folder", value_name = "NAME")]
     pub filename: Option<String>,
@@ -559,6 +604,15 @@ pub struct Cli {
     #[arg(long = "wl-no-leet", help = "Disable leet speak variations", global = true)]
     pub wl_no_leet: bool,
 
+    #[arg(long = "wl-leet-level", help = "Leet depth 0-3 (0 off, 1 single, 2 combos, 3 +case)", value_name = "N", default_value = "2", global = true)]
+    pub wl_leet_level: u8,
+
+    #[arg(long = "wl-no-seasons", help = "Disable season bases (spring/summer/...)", global = true)]
+    pub wl_no_seasons: bool,
+
+    #[arg(long = "wl-no-keyboard", help = "Disable keyboard-walk bases (qwerty/123456/...)", global = true)]
+    pub wl_no_keyboard: bool,
+
     #[arg(long = "wl-output", help = "Write wordlist to file (default: stdout)", value_name = "FILE", global = true)]
     pub wl_output: Option<PathBuf>,
 
@@ -599,6 +653,9 @@ impl Cli {
             min_len: self.wl_min_len,
             max_len: self.wl_max_len,
             leet: !self.wl_no_leet,
+            leet_level: self.wl_leet_level.min(3),
+            seasons: !self.wl_no_seasons,
+            keyboard: !self.wl_no_keyboard,
         }
     }
 

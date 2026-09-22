@@ -1836,3 +1836,46 @@ mod auto_tests {
         assert!(identify_attack(&db, 53, "", Some("dns")).is_none());
     }
 }
+
+#[cfg(test)]
+mod fuzz_tests {
+    use super::*;
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            x
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+    }
+
+    const FRAG: &[&str] = &[
+        "SSH-2.0", "OpenSSH", "220", "vsFTPd", "Microsoft", "220 ", "EHLO",
+        "Password:", "login:", "331", "230", "(", ")", "[1]", "v1.2.3",
+        "Apache", "nginx", "MySQL", "RDP", "NTLM", "\r\n", " ", "x",
+    ];
+
+    #[test]
+    fn fuzz_identify_never_panics() {
+        let db = ServiceDb::new();
+        let mut rng = Rng(0xBA4E2);
+        for _ in 0..3000 {
+            let n = rng.below(6);
+            let mut banner = String::new();
+            for _ in 0..n {
+                banner.push_str(FRAG[rng.below(FRAG.len())]);
+            }
+            let port = rng.below(65536) as u16;
+            let _ = db.identify(port, &banner);
+            let _ = db.lookup(port);
+            let _ = identify_attack(&db, port, &banner, None);
+        }
+    }
+}

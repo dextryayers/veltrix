@@ -291,3 +291,60 @@ mod tests {
         assert!(h.contains_key(reqwest::header::ACCEPT_LANGUAGE));
     }
 }
+
+#[cfg(test)]
+mod fuzz_tests {
+    use super::*;
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            x
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+    }
+
+    const EV: &[&str] = &[
+        "230 Login successful", "530 Login incorrect", "Permission denied",
+        "235 Authentication successful", "Access denied", "invalid password",
+        "401 Unauthorized", "200 OK", "dashboard", "ERROR", "", "ok",
+        "session setup success", "logon failure", "+OK", "-ERR",
+    ];
+
+    #[test]
+    fn fuzz_fingerprint_never_panics() {
+        let protos = ["ssh", "ftp", "smtp", "mysql", "postgres", "smb", "rdp", "redis", "http", "bogus"];
+        let mut rng = Rng(0xF1A6);
+        for _ in 0..3000 {
+            let p = protos[rng.below(protos.len())];
+            let e = EV[rng.below(EV.len())];
+            if let Some(fp) = fingerprint_for(p) {
+                let _ = fp.check(rng.below(2) == 0, e);
+            }
+        }
+    }
+
+    #[test]
+    fn fuzz_proxy_parse_never_panics() {
+        use crate::proxy::ProxyConfig;
+        const PX: &[&str] = &[
+            "http://", "socks5://a:1", "http://u:p@h:8080", "bogus", "",
+            "socks4://1.2.3.4:1080", "https://[::1]:443", "://", "http://h:notaport",
+        ];
+        let mut rng = Rng(0x9907);
+        for _ in 0..2000 {
+            let mut s = String::new();
+            for _ in 0..rng.below(4) {
+                s.push_str(PX[rng.below(PX.len())]);
+            }
+            let _ = ProxyConfig::parse(&s);
+        }
+    }
+}

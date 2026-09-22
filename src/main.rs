@@ -226,6 +226,9 @@ async fn main() {
         Some(Commands::Memcached(ref a)) => run_attack(&cli, "memcached", a, running).await,
         Some(Commands::Man) | Some(Commands::How) => print_manual(),
         Some(Commands::Create(ref a)) => run_create(a).await,
+        Some(Commands::Wordlist(ref w)) => match &w.command {
+            cli::WordlistCommand::Rank(ref a) => run_wordlist_rank(a),
+        },
         Some(Commands::Validate(ref a)) => run_validate(a),
         Some(Commands::Completion(ref a)) => run_completion(a),
         Some(Commands::Serve(ref a)) => run_serve(a, running).await,
@@ -696,6 +699,58 @@ fn encrypt_output_file(output_file: &Option<std::path::PathBuf>, passphrase: &st
     }
 }
 
+/// F8.5: `veltrix wordlist rank --input CANDS --model TRAIN --top N -o OUT`.
+/// Mengurutkan kandidat probable-first agar password paling mungkin dicoba dulu.
+fn run_wordlist_rank(args: &cli::RankArgs) {
+    use crate::utils::ml_predict::MarkovChain;
+    let read_lines = |p: &std::path::Path| -> Vec<String> {
+        std::fs::read_to_string(p)
+            .unwrap_or_else(|e| {
+                eprintln!("Failed to read {}: {}", p.display(), e);
+                std::process::exit(EXIT_CONFIG);
+            })
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect()
+    };
+    let train_path = args.model.clone().unwrap_or_else(|| args.input.clone());
+    let train = read_lines(&train_path);
+    if train.is_empty() {
+        eprintln!("Config error: training file is empty");
+        std::process::exit(EXIT_CONFIG);
+    }
+    let candidates = read_lines(&args.input);
+    if candidates.is_empty() {
+        eprintln!("Config error: input file is empty");
+        std::process::exit(EXIT_CONFIG);
+    }
+    let mut mc = MarkovChain::new(args.order.max(1));
+    mc.train(&train);
+    let top = if args.top == 0 { None } else { Some(args.top) };
+    let mut ranked = mc.rank(&candidates, top);
+    if let Some(ms) = args.min_score {
+        ranked.retain(|(_, s)| *s <= ms);
+    }
+    let lines: Vec<String> = ranked.iter().map(|(p, s)| format!("{}\t{:.4}", p, s)).collect();
+    match args.output.as_ref() {
+        Some(path) => {
+            std::fs::write(path, lines.join("\n")).unwrap_or_else(|e| {
+                eprintln!("Failed to write {}: {}", path.display(), e);
+                std::process::exit(EXIT_CONFIG);
+            });
+            eprintln!("[+] Ranked {} candidates (train={}, order={}) -> {}",
+                lines.len(), train.len(), args.order, path.display());
+        }
+        None => {
+            for l in &lines {
+                println!("{}", l);
+            }
+            eprintln!("[+] Ranked {} candidates (train={})", lines.len(), train.len());
+        }
+    }
+}
+
 async fn run_create(args: &CreateArgs) {
     let cfg = WordlistConfig {
         name: args.name.clone(),
@@ -705,6 +760,9 @@ async fn run_create(args: &CreateArgs) {
         min_len: args.min_len,
         max_len: args.max_len,
         leet: !args.no_leet,
+        leet_level: args.leet_level.min(3),
+        seasons: !args.no_seasons,
+        keyboard: !args.no_keyboard,
     };
     let words = generate_wordlist(&cfg);
 
@@ -848,6 +906,9 @@ fn default_cli_for_validate() -> Cli {
         wl_min_len: 4,
         wl_max_len: 32,
         wl_no_leet: false,
+        wl_leet_level: 2,
+        wl_no_seasons: false,
+        wl_no_keyboard: false,
         wl_output: None,
         ml_train: None,
         ml_generate: None,
