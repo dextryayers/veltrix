@@ -243,6 +243,16 @@ async fn main() {
 
 async fn run_scan(cli: &Cli, args: &cli::ScanPortsArgs, running: Arc<AtomicBool>) {
     print_banner();
+    // ANON: source bind juga berlaku untuk probe scanner.
+    match cli::parse_source_ip(&cli.source_ip) {
+        Ok(ip) => {
+            crate::protocols::tcp::set_source_ip(ip);
+            if let Some(ip) = ip {
+                log::info!("Egress source IP bound to {}", ip);
+            }
+        }
+        Err(e) => exit_config(&e),
+    }
 
     let hosts = if !cli.targets.is_empty() {
         cli.targets.clone()
@@ -345,6 +355,11 @@ struct AutoReport {
 async fn run_auto(cli: &Cli, args: &cli::AutoArgs, running: Arc<AtomicBool>) {
     use std::collections::BTreeMap;
     print_banner();
+    // ANON: source bind untuk fase scan maupun attack berikutnya.
+    match cli::parse_source_ip(&cli.source_ip) {
+        Ok(ip) => crate::protocols::tcp::set_source_ip(ip),
+        Err(e) => exit_config(&e),
+    }
 
     let scan_id = uuid::Uuid::new_v4().to_string();
     let started_at = chrono::Utc::now().to_rfc3339();
@@ -890,6 +905,9 @@ fn default_cli_for_validate() -> Cli {
         proxy: None,
         proxy_file: None,
         proxy_chain: None,
+        proxy_required: false,
+        rotate_proxy_every: 0,
+        source_ip: None,
         output: None,
         format: "plain".into(),
         plugins: vec![],

@@ -186,16 +186,26 @@ impl ProxyConfig {
     pub async fn tcp_connect(&self, addr: &str, timeout: Duration) -> Result<TcpStream, AttackError> {
         match self {
             ProxyConfig::None => {
-                let stream = tokio::time::timeout(timeout, TcpStream::connect(addr)).await
-                    .map_err(|_| AttackError::internal(format!("Timeout connecting to {}", addr)))?
-                    .map_err(|e| AttackError::io("tcp_connect", e.to_string()))?;
+                let stream = crate::protocols::tcp::connect_bound(addr, timeout).await
+                    .map_err(|e| {
+                        if e.kind() == std::io::ErrorKind::TimedOut {
+                            AttackError::internal(format!("Timeout connecting to {}", addr))
+                        } else {
+                            AttackError::io("tcp_connect", e.to_string())
+                        }
+                    })?;
                 return set_tcp_keepalive(stream);
             }
             ProxyConfig::Http { host, port, username, password, .. } => {
                 let proxy_addr = format!("{}:{}", host, port);
-                let stream = tokio::time::timeout(timeout, TcpStream::connect(&proxy_addr)).await
-                    .map_err(|_| AttackError::internal(format!("Timeout connecting to proxy {}", proxy_addr)))?
-                    .map_err(|e| AttackError::io("tcp_connect", e.to_string()))?;
+                let stream = crate::protocols::tcp::connect_bound(&proxy_addr, timeout).await
+                    .map_err(|e| {
+                        if e.kind() == std::io::ErrorKind::TimedOut {
+                            AttackError::internal(format!("Timeout connecting to proxy {}", proxy_addr))
+                        } else {
+                            AttackError::io("tcp_connect", e.to_string())
+                        }
+                    })?;
                 let mut stream = set_tcp_keepalive(stream)?;
 
                 let auth_header = if let (Some(u), Some(p)) = (username, password) {
@@ -226,9 +236,14 @@ impl ProxyConfig {
             }
             ProxyConfig::Socks5 { host, port, username, password } => {
                 let proxy_addr = format!("{}:{}", host, port);
-                let stream = tokio::time::timeout(timeout, TcpStream::connect(&proxy_addr)).await
-                    .map_err(|_| AttackError::internal(format!("Timeout connecting to SOCKS5 proxy {}", proxy_addr)))?
-                    .map_err(|e| AttackError::io("tcp_connect", e.to_string()))?;
+                let stream = crate::protocols::tcp::connect_bound(&proxy_addr, timeout).await
+                    .map_err(|e| {
+                        if e.kind() == std::io::ErrorKind::TimedOut {
+                            AttackError::internal(format!("Timeout connecting to SOCKS5 proxy {}", proxy_addr))
+                        } else {
+                            AttackError::io("tcp_connect", e.to_string())
+                        }
+                    })?;
                 let mut stream = set_tcp_keepalive(stream)?;
 
                 let auth_method = if username.is_some() { 0x02 } else { 0x00 };
@@ -308,9 +323,14 @@ impl ProxyConfig {
             }
             ProxyConfig::Socks4 { host, port, username } => {
                 let proxy_addr = format!("{}:{}", host, port);
-                let stream = tokio::time::timeout(timeout, TcpStream::connect(&proxy_addr)).await
-                    .map_err(|_| AttackError::internal(format!("Timeout connecting to SOCKS4 proxy {}", proxy_addr)))?
-                    .map_err(|e| AttackError::io("tcp_connect", e.to_string()))?;
+                let stream = crate::protocols::tcp::connect_bound(&proxy_addr, timeout).await
+                    .map_err(|e| {
+                        if e.kind() == std::io::ErrorKind::TimedOut {
+                            AttackError::internal(format!("Timeout connecting to SOCKS4 proxy {}", proxy_addr))
+                        } else {
+                            AttackError::io("tcp_connect", e.to_string())
+                        }
+                    })?;
                 let mut stream = set_tcp_keepalive(stream)?;
 
                 let (host_part, port_part) = addr.rsplit_once(':')
@@ -370,9 +390,14 @@ impl ProxyConfig {
                 let proxies = proxies.clone();
                 let first = &proxies[0];
                 let first_addr = format!("{}:{}", first.host(), first.port());
-                let stream = tokio::time::timeout(timeout, TcpStream::connect(&first_addr)).await
-                    .map_err(|_| AttackError::internal(format!("Timeout connecting to chain proxy {}", first_addr)))?
-                    .map_err(|e| AttackError::io("tcp_connect", e.to_string()))?;
+                let stream = crate::protocols::tcp::connect_bound(&first_addr, timeout).await
+                    .map_err(|e| {
+                        if e.kind() == std::io::ErrorKind::TimedOut {
+                            AttackError::internal(format!("Timeout connecting to chain proxy {}", first_addr))
+                        } else {
+                            AttackError::io("tcp_connect", e.to_string())
+                        }
+                    })?;
                 let mut stream = set_tcp_keepalive(stream)?;
 
                 let mut current_proxy = first;

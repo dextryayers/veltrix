@@ -236,7 +236,10 @@ pub fn classify_error(error: Option<&str>, success: bool) -> ClassifiedError {
 }
 
 pub fn compute_backoff(attempt: u32) -> Duration {
-    let ms = 500u64 * 2u64.pow(attempt);
+    // F9.2 fuzz finding: 500 * 2^attempt overflow u64 untuk attempt besar.
+    // Saturasi + clamp agar tak pernah panic, tetap cap 30 detik.
+    let shift = attempt.min(20);
+    let ms = 500u64.saturating_mul(1u64 << shift);
     Duration::from_millis(ms.min(30_000))
 }
 
@@ -318,6 +321,13 @@ mod tests {
     fn test_compute_backoff_capped() {
         let b = compute_backoff(10);
         assert!(b <= Duration::from_millis(30_000));
+    }
+
+    #[test]
+    fn test_compute_backoff_huge_attempt_no_overflow() {
+        // Regresi F9.2: attempt raksasa tidak boleh panic/overflow.
+        assert_eq!(compute_backoff(u32::MAX), Duration::from_millis(30_000));
+        assert_eq!(compute_backoff(1000), Duration::from_millis(30_000));
     }
 
     #[test]

@@ -34,6 +34,9 @@ pub struct ScanPortsArgs {
 
     #[arg(long = "no-banner", help = "Disable banner grabbing")]
     pub no_banner: bool,
+
+    #[arg(long = "shuffle", help = "Randomize probe order (anti-fingerprint IDS)", global = true)]
+    pub shuffle: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -551,6 +554,15 @@ pub struct Cli {
     #[arg(long = "proxy-chain", help = "Comma-separated proxy chain: type://host:port,...", value_name = "PROXIES", global = true)]
     pub proxy_chain: Option<String>,
 
+    #[arg(long = "proxy-required", help = "Fail-closed: abort if no proxy is configured (exit 2)", global = true)]
+    pub proxy_required: bool,
+
+    #[arg(long = "rotate-proxy-every", help = "Rotate egress proxy every N attempts (0 = only on signal)", value_name = "N", default_value = "0", global = true)]
+    pub rotate_proxy_every: usize,
+
+    #[arg(long = "source-ip", help = "Bind egress sockets to this local IP (VPN/multihomed anonymity)", value_name = "IP", global = true)]
+    pub source_ip: Option<String>,
+
     // ── Output ──
     #[arg(short = 'o', long = "output", help = "Write results to FILE", value_name = "FILE", global = true)]
     pub output: Option<PathBuf>,
@@ -664,8 +676,7 @@ impl Cli {
     }
 
     pub fn build_attack_config(&self, protocol: &str, args: &ProtocolArgs) -> AttackConfig {
-        use crate::utils::ratelimit::parse_interval_ms;
-        let fail_cfg = |e: String| -> ! {
+        use crate::utils::ratelimit::parse_interval_ms;        let fail_cfg = |e: String| -> ! {
             eprintln!("Config error: {}", e);
             std::process::exit(2);
         };
@@ -676,6 +687,10 @@ impl Cli {
         let user_cooldown = match parse_interval_ms(&self.user_cooldown) {
             Ok(ms) => std::time::Duration::from_millis(ms),
             Err(e) => fail_cfg(format!("--user-cooldown: {}", e)),
+        };
+        let source_ip = match parse_source_ip(&self.source_ip) {
+            Ok(ip) => ip,
+            Err(e) => fail_cfg(e),
         };
         // F4.5/F4.6: preset hanya mengisi field yang masih di nilai default clap,
         // sehingga flag eksplisit user selalu menang atas preset.
@@ -716,6 +731,9 @@ impl Cli {
             proxy: self.proxy.clone(),
             proxy_file: self.proxy_file.clone(),
             proxy_chain: self.proxy_chain.clone(),
+            proxy_required: self.proxy_required,
+            rotate_proxy_every: self.rotate_proxy_every,
+            source_ip,
             output_file: self.output.clone(),
             output_format: OutputFormat::from_str(&self.format),
             resume_file: self.resume.clone(),
@@ -954,8 +972,20 @@ impl Cli {
     }
 }
 
-pub fn port_to_protocol(port: u16) -> Option<&'static str> {
-    match port {
+/// Parse --source-ip. None bila flag kosong. Exit-2 style error string.
+pub fn parse_source_ip(s: &Option<String>) -> Result<Option<std::net::IpAddr>, String> {
+    match s {
+        None => Ok(None),
+        Some(v) if v.trim().is_empty() => Ok(None),
+        Some(v) => v
+            .trim()
+            .parse::<std::net::IpAddr>()
+            .map(Some)
+            .map_err(|_| format!("--source-ip: '{}' bukan alamat IP valid", v.trim())),
+    }
+}
+
+pub fn port_to_protocol(port: u16) -> Option<&'static str> {    match port {
         22 => Some("ssh"),
         21 => Some("ftp"),
         23 => Some("telnet"),

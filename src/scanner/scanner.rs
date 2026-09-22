@@ -20,6 +20,9 @@ pub struct ScanConfig {
     pub banner_grab: bool,
     pub retries: u32,
     pub show_progress: bool,
+    /// ANON: acak urutan probe (Fisher-Yates, fastrand) agar pola scan
+    /// tidak sekuensial dan mudah difingerprint IDS.
+    pub shuffle: bool,
 }
 
 impl Default for ScanConfig {
@@ -32,6 +35,7 @@ impl Default for ScanConfig {
             banner_grab: true,
             retries: 1,
             show_progress: true,
+            shuffle: false,
         }
     }
 }
@@ -69,8 +73,23 @@ impl Scanner {
 
         let mut handles = Vec::with_capacity(total_tasks);
 
+        // ANON: susun daftar probe dulu agar bisa diacak bila diminta.
+        let mut probes: Vec<(String, u16)> = Vec::with_capacity(total_tasks);
         for host in &self.config.hosts {
             for &port in &self.config.ports {
+                probes.push((host.clone(), port));
+            }
+        }
+        if self.config.shuffle {
+            // Fisher-Yates dengan fastrand (sudah dependency).
+            for i in (1..probes.len()).rev() {
+                let j = fastrand::usize(..=i);
+                probes.swap(i, j);
+            }
+            log::info!("Scan probe order shuffled ({} probes)", probes.len());
+        }
+
+        for (host, port) in probes {
                 if !self.running.load(Ordering::SeqCst) {
                     break;
                 }
@@ -111,7 +130,6 @@ impl Scanner {
                     }
                     result
                 }));
-            }
         }
 
         let mut results = Vec::with_capacity(total_tasks / 10);
@@ -162,13 +180,8 @@ async fn scan_port(
 
         let start = Instant::now();
 
-        match timeout(
-            Duration::from_secs(config.timeout_secs),
-            TcpStream::connect(&addr),
-        )
-        .await
-        {
-            Ok(Ok(mut stream)) => {
+        match crate::protocols::tcp::connect_bound(&addr, Duration::from_secs(config.timeout_secs)).await {
+            Ok(mut stream) => {
                 let _ = stream.set_nodelay(true);
                 let latency_ms = start.elapsed().as_millis() as u64;
 
@@ -206,7 +219,7 @@ async fn scan_port(
                     latency_ms,
                 });
             }
-            Ok(Err(e)) => {
+            Ok(Err(e)) | Err(e) => {
                 let err_str = e.to_string();
                 if attempt < max_retries {
                     if err_str.contains("refused")
@@ -215,14 +228,11 @@ async fn scan_port(
                     {
                         return None;
                     }
+                    // Timeout / error lain: coba lagi bila retries tersisa.
+                    continue;
                 }
                 if attempt == max_retries {
                     log::debug!("Port {}/{} connection failed: {}", host, port, err_str);
-                }
-            }
-            Err(_) => {
-                if attempt < max_retries {
-                    continue;
                 }
             }
         }

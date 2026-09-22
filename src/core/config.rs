@@ -80,6 +80,10 @@ pub struct AttackConfig {
     pub only_open: Option<PathBuf>,
     // Fase 6: tampilkan password penuh (default masked)
     pub show_secrets: bool,
+    // ANON: fail-closed proxy, rotasi terjadwal, egress source IP.
+    pub proxy_required: bool,
+    pub rotate_proxy_every: usize,
+    pub source_ip: Option<std::net::IpAddr>,
 }
 
 #[derive(Clone, Debug)]
@@ -213,6 +217,16 @@ impl AttackConfig {
                 )));
             }
         }
+        // ANON: fail-closed bila operator menuntut proxy.
+        if self.proxy_required
+            && self.proxy.is_none()
+            && self.proxy_file.is_none()
+            && self.proxy_chain.is_none()
+        {
+            return Err(AttackError::config(
+                "--proxy-required set but no proxy configured. Use --proxy, --proxy-file, or --proxy-chain.",
+            ));
+        }
         Ok(())
     }
 
@@ -326,6 +340,9 @@ mod tests {
             aggressive_lab: false,
             i_understand_risk: false,
             only_open: None,
+            proxy_required: false,
+            rotate_proxy_every: 0,
+            source_ip: None,
             show_secrets: false,
         }
     }

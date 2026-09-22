@@ -385,6 +385,9 @@ mod tests {
             aggressive_lab: false,
             i_understand_risk: false,
             only_open: None,
+            proxy_required: false,
+            rotate_proxy_every: 0,
+            source_ip: None,
             show_secrets: false,
         }
     }

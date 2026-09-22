@@ -33,6 +33,9 @@ pub struct WorkerPool {
     lockout_pause: bool,
     user_cooldowns: Arc<dashmap::DashMap<String, Instant>>,
     target_cooldowns: Arc<dashmap::DashMap<String, Instant>>,
+    // ANON: rotasi proxy terjadwal tiap N attempt (0 = hanya saat sinyal).
+    rotation_every: usize,
+    rotation_counter: Arc<AtomicU64>,
 }
 
 impl WorkerPool {
@@ -55,6 +58,8 @@ impl WorkerPool {
             lockout_pause: config.lockout_pause,
             user_cooldowns: Arc::new(dashmap::DashMap::new()),
             target_cooldowns: Arc::new(dashmap::DashMap::new()),
+            rotation_every: config.rotate_proxy_every,
+            rotation_counter: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -85,6 +90,8 @@ impl WorkerPool {
         let lockout_pause = self.lockout_pause;
         let user_cooldowns = Arc::clone(&self.user_cooldowns);
         let target_cooldowns = Arc::clone(&self.target_cooldowns);
+        let rotation_every = self.rotation_every;
+        let rotation_counter = Arc::clone(&self.rotation_counter);
         let skipped = Arc::clone(&self.skipped_users);
         let target = task.target;
         let credential = task.credential;
@@ -153,11 +160,19 @@ impl WorkerPool {
 
             let mut last_result = None;
             let proxy_count = proxies.len();
-            let mut proxy_idx: usize = 0;
+            // ANON: slot awal dari counter global. Tanpa jadwal: semua task mulai
+            // dari proxy[0]. Dengan --rotate-proxy-every N: tiap N task global
+            // pindah ke proxy berikutnya, egress tersebar merata dan periodik.
+            let mut proxy_idx: usize = if rotation_every > 0 && proxy_count > 0 {
+                let slot = rotation_counter.fetch_add(1, Ordering::Relaxed) as usize;
+                (slot / rotation_every) % proxy_count
+            } else {
+                0
+            };
             let mut current_proxy = if proxy_count == 0 {
                 None
             } else {
-                Some(proxies[0].clone())
+                Some(proxies[proxy_idx].clone())
             };
 
             for attempt in 0..=retries {

@@ -337,6 +337,9 @@ async fn run_job_task(state: AppState, job_id: String) {
         i_understand_risk: false,
         only_open: None,
         show_secrets: spec.show_secrets,
+        proxy_required: false,
+        rotate_proxy_every: 0,
+        source_ip: None,
     };
 
     let mut orch = match crate::core::attack::AttackOrchestrator::new(config, cancel).await {

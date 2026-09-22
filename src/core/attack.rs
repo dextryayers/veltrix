@@ -74,6 +74,11 @@ impl AttackOrchestrator {
         }
         // F4.4: override UA global (first-wins per proses, sama seperti globals http lain).
         crate::protocols::transport::set_user_agent_override(config.user_agent.clone());
+        // ANON: egress source IP global untuk semua socket baru.
+        crate::protocols::tcp::set_source_ip(config.source_ip);
+        if let Some(ip) = config.source_ip {
+            log::info!("Egress source IP bound to {}", ip);
+        }
 
         // F4.1: throttle per-target dari --target-rate-limit (min interval),
         // per-user dari --user-cooldown.
@@ -399,8 +404,8 @@ impl AttackOrchestrator {
                         let timeout_dur = std::time::Duration::from_secs(3);
                         handles.push(async move {
                             let _guard = permit.acquire().await;
-                            match tokio::time::timeout(timeout_dur, tokio::net::TcpStream::connect(&addr)).await {
-                                Ok(Ok(stream)) => { drop(stream); Some(target) }
+                            match crate::protocols::tcp::connect_bound(&addr, timeout_dur).await {
+                                Ok(stream) => { drop(stream); Some(target) }
                                 _ => None,
                             }
                         });
