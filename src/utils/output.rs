@@ -420,7 +420,7 @@ impl LiveDashboard {
                 println!("  {}", line.green().bold());
             }
             if !self.show_secrets {
-                println!("  {}", "(passwords masked; re-run with --show-secrets for full values)".dimmed());
+                println!("  {}", "(passwords masked via --hide-secrets)".dimmed());
             }
         }
         println!();
@@ -681,7 +681,7 @@ impl OutputHandler {
                 println!("  {}", line.green().bold());
             }
             if !self.show_secrets {
-                println!("  {}", "(passwords masked; re-run with --show-secrets for full values)".dimmed());
+                println!("  {}", "(passwords masked via --hide-secrets)".dimmed());
             }
         }
         println!();

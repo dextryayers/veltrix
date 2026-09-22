@@ -793,16 +793,17 @@ veltrix ssh -t 10.0.0.1 -U users.txt -W passwords.txt -o result.html -f html
 ```
 
 - `plain`: human readable console style log
-- `json`: JSONL, one `veltrix-finding/v2` object per line (run_id, credential_ref, severity, evidence, no plaintext password)
-- `csv`: spreadsheet friendly rows (password masked unless `--show-secrets`)
-- `yaml`: configuration pipeline friendly output (password masked unless `--show-secrets`)
+- `json`: JSONL, one `veltrix-finding/v2` object per line (run_id, credential_ref, severity, evidence; password included unless `--hide-secrets`)
+- `csv`: spreadsheet friendly rows (password shown in full unless `--hide-secrets`)
+- `yaml`: configuration pipeline friendly output (password shown in full unless `--hide-secrets`)
 - `html`: v2 report with executive summary, findings, remediation, and evidence appendix
 
 HTML mode automatically writes a report beside the selected output path.
 
-Passwords are masked (`a***`) in console, HTML, CSV, YAML, plain files, auto
-reports, and API responses by default. Use `--show-secrets` to reveal full
-values. JSON findings never contain plaintext (only `credential_ref`
+Passwords are shown in full in console, HTML, CSV, YAML, plain files, and auto
+reports by default. Use `--hide-secrets` to mask (`a***`), e.g. when the
+screen is shared/recorded. API responses stay masked by default
+(`?show_secrets=1` dicatat di audit). JSON findings never contain plaintext (only `credential_ref`
 `user@host:port#hash8`).
 
 ### 13.2 Encrypted output

@@ -96,7 +96,7 @@ TCP mentah). Catatan jujur: path HTTP `reqwest` tidak mendukung bind sumber
 
 ## 7. Jejak lokal (opsec mesin operator)
 
-- Password default **masked** di console/file (`--show-secrets` untuk penuh).
+- Password tampil penuh di console/file default; `--hide-secrets` untuk mask.
 - Session file berisi kredensial plaintext → otomatis `chmod 0600` (unix).
 - `--encrypt` (AES-256-GCM + Argon2) untuk arsip output.
 - Setelah engagement: `shred -u session.json hasil.*` dan putar kredensial

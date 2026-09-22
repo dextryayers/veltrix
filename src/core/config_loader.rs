@@ -390,7 +390,7 @@ mod tests {
             source_ip: None,
             delay_jitter_ms: 100,
             check_proxy: false,
-            show_secrets: false,
+            show_secrets: true,
         }
     }
 

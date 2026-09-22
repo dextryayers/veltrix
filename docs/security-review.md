@@ -27,7 +27,7 @@ atau `static mut`.
 
 | Jalur | Status |
 |---|---|
-| Console/report/file output | Default **masked** (`P***`); plaintext hanya dengan `--show-secrets` eksplisit |
+| Console/report/file output (CLI attack) | Default tampil **penuh**; mask hanya dengan `--hide-secrets` eksplisit (`--show-secrets` lama tetap diterima sebagai no-op) |
 | Log (`RUST_LOG=debug`) | Tidak ada nilai password; hanya hitungan (`Expanded N passwords`, `Generated N`) |
 | Session/resume file | Plaintext combos (kebutuhan resume) + HMAC integrity; **baru**: file dikunci `0600` (unix) saat save |
 | Output terenkripsi | AES-256-GCM + Argon2 (`--encrypt`), passphrase via prompt tersembunyi |

@@ -55,8 +55,8 @@ Tanpa proxy yang sehat, jangan serang target sensitif — IP asli terekspos.
 
 ## 6. Output & kerahasiaan
 
-- `-o hasil -f json|csv|html|yaml|plain`; default password **masked**.
-- `--show-secrets` hanya bila butuh nilai penuh (laporan internal).
+- `-o hasil -f json|csv|html|yaml|plain`; password tampil **penuh** default.
+- `--hide-secrets` untuk mask (`root:a***`) bila layar di-share/direkam.
 - `--encrypt` (AES-256-GCM) untuk arsip; session file otomatis `0600`.
 - `shred -u` file sensitif setelah engagement selesai.
 

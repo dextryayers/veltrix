@@ -524,7 +524,10 @@ pub struct Cli {
     #[arg(help_heading = "6 Attack Control", long = "fp-check", help = "Fingerprint check: re-verify claimed successes to eliminate false positives", global = true)]
     pub fp_check: bool,
 
-    #[arg(help_heading = "6 Attack Control", long = "show-secrets", help = "Show full passwords in console, reports, and API (default: masked)", global = true)]
+    #[arg(help_heading = "6 Attack Control", long = "hide-secrets", visible_alias = "mask", help = "Mask passwords in console and reports (default: shown in full)", global = true)]
+    pub hide_secrets: bool,
+
+    #[arg(long = "show-secrets", hide = true, help = "Deprecated: passwords are shown by default; use --hide-secrets to mask", global = true)]
     pub show_secrets: bool,
 
     // ── F4: stealth, spray cadence, limiter, cooldown ──
@@ -799,7 +802,9 @@ impl Cli {
             decrypt_output: self.decrypt_output.clone(),
             dry_run: self.dry_run,
             fp_check: self.fp_check,
-            show_secrets: self.show_secrets,
+            // Default: password tampil penuh saat attack; --hide-secrets
+            // untuk mask. Flag lama --show-secrets diterima (no-op).
+            show_secrets: !self.hide_secrets,
             spray_interval,
             spray_jitter_pct: self.spray_jitter,
             target_rate_limit: self.target_rate_limit,
