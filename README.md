@@ -490,7 +490,7 @@ veltrix http -t 10.0.0.20:8080 --http-userfield username --http-passfield passwo
 |---|---|---|
 | `-u, --user USER` | Repeatable single username | `-u admin -u root` |
 | `-U, --user-file FILE` | Username wordlist | `-U users.txt` |
-| `--password PASS` | Repeatable single password, alias `--pwd` | `--password admin123` |
+| `-w, --password PASS` | Repeatable single password, alias `--pwd` | `--password admin123` |
 | `-W, --password-list FILE` | Password wordlist, alias `--pl` | `-W passwords.txt` |
 | `-C, --combo FILE` | Combo file with `user:pass` per line | `-C combos.txt` |
 | `--max-password-len N` | Truncate passwords longer than N | `--max-password-len 64` |

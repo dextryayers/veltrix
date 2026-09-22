@@ -29,7 +29,8 @@ veltrix auto -t 10.0.0.0/24 --policy policy.toml
 | Spray | `--spray --spray-interval 30m` | anti-lockout (1 pass → semua user) |
 
 `--dry-run` selalu menampilkan total kombinasi + estimasi waktu + `Rules:`
-bila `--rule` dipakai. Exit code: `0` ada temuan, `1` nihil/gagal,
+bila `--rule` dipakai. `-w` = `--password` singkat; `-q/--quiet` = hanya
+sukses (tanpa dashboard). Exit code: `0` ada temuan, `1` nihil/gagal,
 `2` config invalid, `130` interupsi.
 
 ## 4. Profil keamanan operasional

@@ -8,34 +8,34 @@ use crate::utils::wordlist_gen::WordlistConfig;
 
 #[derive(Args, Debug, Clone)]
 pub struct ProtocolArgs {
-    #[arg(long = "rdp-domain", help = "RDP domain (prepended to username)", value_name = "DOMAIN")]
+    #[arg(help_heading = "Protocol Options", long = "rdp-domain", help = "RDP domain (prepended to username)", value_name = "DOMAIN")]
     pub rdp_domain: Option<String>,
 
-    #[arg(long = "http-userfield", help = "HTTP form username field name", value_name = "FIELD")]
+    #[arg(help_heading = "Protocol Options", long = "http-userfield", help = "HTTP form username field name", value_name = "FIELD")]
     pub http_userfield: Option<String>,
 
-    #[arg(long = "http-passfield", help = "HTTP form password field name", value_name = "FIELD")]
+    #[arg(help_heading = "Protocol Options", long = "http-passfield", help = "HTTP form password field name", value_name = "FIELD")]
     pub http_passfield: Option<String>,
 
-    #[arg(long = "http-success", help = "HTTP form success indicator string", value_name = "TEXT")]
+    #[arg(help_heading = "Protocol Options", long = "http-success", help = "HTTP form success indicator string", value_name = "TEXT")]
     pub http_success: Option<String>,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct ScanPortsArgs {
-    #[arg(long = "ports", help = "Ports to scan: '22,80,443', '1-1000', or 'common' (default: common ~1200 ports)", value_name = "PORTS")]
+    #[arg(help_heading = "Scanner Options", long = "ports", help = "Ports to scan: '22,80,443', '1-1000', or 'common' (default: common ~1200 ports)", value_name = "PORTS")]
     pub port_spec: Option<String>,
 
-    #[arg(long = "scan-timeout", help = "Per-port timeout in seconds", default_value = "3", value_name = "SEC")]
+    #[arg(help_heading = "Scanner Options", long = "scan-timeout", help = "Per-port timeout in seconds", default_value = "3", value_name = "SEC")]
     pub scan_timeout: u64,
 
-    #[arg(long = "rate", help = "Max concurrent scans", default_value = "500", value_name = "N")]
+    #[arg(help_heading = "Scanner Options", long = "rate", help = "Max concurrent scans", default_value = "500", value_name = "N")]
     pub scan_rate: usize,
 
-    #[arg(long = "no-banner", help = "Disable banner grabbing")]
+    #[arg(help_heading = "Scanner Options", long = "no-banner", help = "Disable banner grabbing")]
     pub no_banner: bool,
 
-    #[arg(long = "shuffle", help = "Randomize probe order (anti-fingerprint IDS)", global = true)]
+    #[arg(help_heading = "Scanner Options", long = "shuffle", help = "Randomize probe order (anti-fingerprint IDS)", global = true)]
     pub shuffle: bool,
 }
 
@@ -44,10 +44,10 @@ pub struct AutoArgs {
     #[command(flatten)]
     pub scan: ScanPortsArgs,
 
-    #[arg(long = "policy", help = "Auto-mode policy file (TOML): allowed protocols/subnets, max threads, min confidence", value_name = "FILE")]
+    #[arg(help_heading = "Auto Options", long = "policy", help = "Auto-mode policy file (TOML): allowed protocols/subnets, max threads, min confidence", value_name = "FILE")]
     pub policy: Option<PathBuf>,
 
-    #[arg(long = "min-confidence", help = "Minimum fingerprint confidence 0-100 to launch an attack group", value_name = "N")]
+    #[arg(help_heading = "Auto Options", long = "min-confidence", help = "Minimum fingerprint confidence 0-100 to launch an attack group", value_name = "N")]
     pub min_confidence: Option<u8>,
 }
 
@@ -209,10 +209,8 @@ pub enum Commands {
     #[command(about = "Distributed worker: pull chunks from a coordinator and execute them")]
     DistWorker(DistWorkerArgs),
 
-    #[command(about = "Display comprehensive manual with detailed usage, examples, and option reference")]
+    #[command(about = "Display comprehensive manual with detailed usage, examples, and option reference", visible_alias = "how")]
     Man,
-    #[command(about = "Alias for man — display full user manual")]
-    How,
 
     #[command(about = "Check egress IP via proxy (or direct): verify your cover before attacking")]
     CheckIp(CheckIpArgs),
@@ -234,154 +232,154 @@ pub struct WordlistArgs {
 
 #[derive(Args, Debug, Clone)]
 pub struct RankArgs {
-    #[arg(long = "input", help = "Candidate passwords file (one per line)", value_name = "FILE")]
+    #[arg(help_heading = "Wordlist Options", long = "input", help = "Candidate passwords file (one per line)", value_name = "FILE")]
     pub input: PathBuf,
 
-    #[arg(long = "model", help = "Training wordlist file for the Markov model (one per line). Defaults to --input itself", value_name = "FILE")]
+    #[arg(help_heading = "Wordlist Options", long = "model", help = "Training wordlist file for the Markov model (one per line). Defaults to --input itself", value_name = "FILE")]
     pub model: Option<PathBuf>,
 
-    #[arg(long = "order", help = "Markov chain order", value_name = "N", default_value = "3")]
+    #[arg(help_heading = "Wordlist Options", long = "order", help = "Markov chain order", value_name = "N", default_value = "3")]
     pub order: usize,
 
-    #[arg(long = "top", help = "Keep only top N candidates (0 = all)", value_name = "N", default_value = "10000")]
+    #[arg(help_heading = "Wordlist Options", long = "top", help = "Keep only top N candidates (0 = all)", value_name = "N", default_value = "10000")]
     pub top: usize,
 
-    #[arg(long = "min-score", help = "Drop candidates with score above this (lower = more probable)", value_name = "F")]
+    #[arg(help_heading = "Wordlist Options", long = "min-score", help = "Drop candidates with score above this (lower = more probable)", value_name = "F")]
     pub min_score: Option<f64>,
 
-    #[arg(short = 'o', long = "output", help = "Output file (default: stdout)", value_name = "FILE")]
+    #[arg(help_heading = "Output Options", short = 'o', long = "output", help = "Output file (default: stdout)", value_name = "FILE")]
     pub output: Option<PathBuf>,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct EvalArgs {
-    #[arg(long = "ranked", help = "Ranked list file from `wordlist rank` (format: password<TAB>score, most-probable first)", value_name = "FILE")]
+    #[arg(help_heading = "Wordlist Options", long = "ranked", help = "Ranked list file from `wordlist rank` (format: password<TAB>score, most-probable first)", value_name = "FILE")]
     pub ranked: PathBuf,
 
-    #[arg(long = "relevant", help = "Held-out relevant passwords file (one per line, e.g. real leaks for the target profile)", value_name = "FILE")]
+    #[arg(help_heading = "Wordlist Options", long = "relevant", help = "Held-out relevant passwords file (one per line, e.g. real leaks for the target profile)", value_name = "FILE")]
     pub relevant: PathBuf,
 
-    #[arg(long = "k", help = "Comma-separated K values for precision@K (e.g. 10,20,50,100)", value_name = "LIST", default_value = "10,20,50")]
+    #[arg(help_heading = "Wordlist Options", long = "k", help = "Comma-separated K values for precision@K (e.g. 10,20,50,100)", value_name = "LIST", default_value = "10,20,50")]
     pub k: String,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct CheckIpArgs {
-    #[arg(long = "timeout", help = "Egress check timeout in seconds", value_name = "SEC", default_value = "10")]
+    #[arg(help_heading = "Check Options", long = "timeout", help = "Egress check timeout in seconds", value_name = "SEC", default_value = "10")]
     pub timeout: u64,
 
-    #[arg(long = "url", help = "IP echo service URL (must return plain-text IP)", value_name = "URL", default_value = "https://api.ipify.org")]
+    #[arg(help_heading = "Check Options", long = "url", help = "IP echo service URL (must return plain-text IP)", value_name = "URL", default_value = "https://api.ipify.org")]
     pub url: String,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct ValidateArgs {
-    #[arg(help = "Config file to validate (TOML or JSON)", value_name = "FILE")]
+    #[arg(help_heading = "Validate Options", help = "Config file to validate (TOML or JSON)", value_name = "FILE")]
     pub file: PathBuf,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct CompletionArgs {
-    #[arg(help = "Shell: bash, zsh, fish, powershell")]
+    #[arg(help_heading = "Completion Options", help = "Shell: bash, zsh, fish, powershell")]
     pub shell: String,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct ServeArgs {
-    #[arg(long = "bind", help = "API bind address (default 127.0.0.1:8080; bind 0.0.0.0 only on trusted nets)", value_name = "ADDR", default_value = "127.0.0.1:8080")]
+    #[arg(help_heading = "Server Options", long = "bind", help = "API bind address (default 127.0.0.1:8080; bind 0.0.0.0 only on trusted nets)", value_name = "ADDR", default_value = "127.0.0.1:8080")]
     pub bind: String,
 
-    #[arg(long = "api-token", help = "Pre-shared API token (or env VELTRIX_API_TOKEN; ephemeral if omitted)", value_name = "TOKEN")]
+    #[arg(help_heading = "Server Options", long = "api-token", help = "Pre-shared API token (or env VELTRIX_API_TOKEN; ephemeral if omitted)", value_name = "TOKEN")]
     pub api_token: Option<String>,
 
-    #[arg(long = "api-rate-limit", help = "Max API requests per minute per IP", value_name = "N", default_value = "120")]
+    #[arg(help_heading = "Server Options", long = "api-rate-limit", help = "Max API requests per minute per IP", value_name = "N", default_value = "120")]
     pub rate_per_min: u32,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct DistCoordinatorArgs {
-    #[arg(long = "bind", help = "Coordinator bind address", value_name = "ADDR", default_value = "127.0.0.1:5555")]
+    #[arg(help_heading = "Server Options", long = "bind", help = "Coordinator bind address", value_name = "ADDR", default_value = "127.0.0.1:5555")]
     pub bind: String,
 
-    #[arg(long = "dist-token", help = "Per-run worker token (or env VELTRIX_DIST_TOKEN)", value_name = "TOKEN")]
+    #[arg(help_heading = "Server Options", long = "dist-token", help = "Per-run worker token (or env VELTRIX_DIST_TOKEN)", value_name = "TOKEN")]
     pub dist_token: Option<String>,
 
-    #[arg(long = "dist-token-ttl", help = "Token lifetime in seconds", value_name = "SEC", default_value = "21600")]
+    #[arg(help_heading = "Server Options", long = "dist-token-ttl", help = "Token lifetime in seconds", value_name = "SEC", default_value = "21600")]
     pub token_ttl: u64,
 
-    #[arg(long = "chunk-size", help = "Tasks per chunk", value_name = "N", default_value = "100")]
+    #[arg(help_heading = "Server Options", long = "chunk-size", help = "Tasks per chunk", value_name = "N", default_value = "100")]
     pub chunk_size: usize,
 
-    #[arg(long = "chunk-timeout", help = "Seconds before an in-flight chunk is requeued", value_name = "SEC", default_value = "120")]
+    #[arg(help_heading = "Server Options", long = "chunk-timeout", help = "Seconds before an in-flight chunk is requeued", value_name = "SEC", default_value = "120")]
     pub chunk_timeout: u64,
 
-    #[arg(long = "heartbeat-timeout", help = "Seconds without heartbeat before a worker is dropped", value_name = "SEC", default_value = "60")]
+    #[arg(help_heading = "Server Options", long = "heartbeat-timeout", help = "Seconds without heartbeat before a worker is dropped", value_name = "SEC", default_value = "60")]
     pub heartbeat_timeout: u64,
 
-    #[arg(long = "max-attempts", help = "Max assignments per chunk before marking failed", value_name = "N", default_value = "3")]
+    #[arg(help_heading = "Server Options", long = "max-attempts", help = "Max assignments per chunk before marking failed", value_name = "N", default_value = "3")]
     pub max_attempts: u32,
 
-    #[arg(long = "protocol", help = "Attack protocol (repeatable)", value_name = "PROTO", default_value = "ssh")]
+    #[arg(help_heading = "Server Options", long = "protocol", help = "Attack protocol (repeatable)", value_name = "PROTO", default_value = "ssh")]
     pub protocols: Vec<String>,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct DistWorkerArgs {
-    #[arg(long = "connect", help = "Coordinator address host:port", value_name = "ADDR")]
+    #[arg(help_heading = "Server Options", long = "connect", help = "Coordinator address host:port", value_name = "ADDR")]
     pub connect: String,
 
-    #[arg(long = "dist-token", help = "Run token from coordinator (or env VELTRIX_DIST_TOKEN)", value_name = "TOKEN")]
+    #[arg(help_heading = "Server Options", long = "dist-token", help = "Run token from coordinator (or env VELTRIX_DIST_TOKEN)", value_name = "TOKEN")]
     pub dist_token: Option<String>,
 
-    #[arg(long = "name", help = "Worker hostname label", value_name = "NAME", default_value = "worker")]
+    #[arg(help_heading = "Generator Options", long = "name", help = "Worker hostname label", value_name = "NAME", default_value = "worker")]
     pub name: String,
 
     #[arg(long = "threads", help = "Max concurrent task executions", value_name = "N", default_value = "10")]
     pub threads: usize,
 
-    #[arg(long = "checkpoint-file", help = "Checkpoint file for acked task_ids", value_name = "FILE")]
+    #[arg(help_heading = "Server Options", long = "checkpoint-file", help = "Checkpoint file for acked task_ids", value_name = "FILE")]
     pub checkpoint_file: Option<PathBuf>,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct CreateArgs {
-    #[arg(short = 'n', long = "name", help = "Target name (e.g. 'John Smith')", value_name = "NAME")]
+    #[arg(help_heading = "Generator Options", short = 'n', long = "name", help = "Target name (e.g. 'John Smith')", value_name = "NAME")]
     pub name: Option<String>,
 
-    #[arg(short = 'c', long = "company", help = "Company name", value_name = "COMPANY")]
+    #[arg(help_heading = "Generator Options", short = 'c', long = "company", help = "Company name", value_name = "COMPANY")]
     pub company: Option<String>,
 
-    #[arg(short = 'd', long = "dob", help = "Date of birth (YYYY-MM-DD)", value_name = "DATE")]
+    #[arg(help_heading = "Generator Options", short = 'd', long = "dob", help = "Date of birth (YYYY-MM-DD)", value_name = "DATE")]
     pub dob: Option<String>,
 
-    #[arg(short = 'k', long = "keyword", help = "Additional keyword (repeatable)", value_name = "WORD")]
+    #[arg(help_heading = "Generator Options", short = 'k', long = "keyword", help = "Additional keyword (repeatable)", value_name = "WORD")]
     pub keywords: Vec<String>,
 
-    #[arg(long = "min-len", help = "Minimum password length", default_value = "4", value_name = "N")]
+    #[arg(help_heading = "Generator Options", long = "min-len", help = "Minimum password length", default_value = "4", value_name = "N")]
     pub min_len: usize,
 
-    #[arg(long = "max-len", help = "Maximum password length", default_value = "32", value_name = "N")]
+    #[arg(help_heading = "Generator Options", long = "max-len", help = "Maximum password length", default_value = "32", value_name = "N")]
     pub max_len: usize,
 
-    #[arg(long = "no-leet", help = "Disable leet speak variations")]
+    #[arg(help_heading = "Generator Options", long = "no-leet", help = "Disable leet speak variations")]
     pub no_leet: bool,
 
-    #[arg(long = "leet-level", help = "Leet depth 0-3 (default 2)", value_name = "N", default_value = "2")]
+    #[arg(help_heading = "Generator Options", long = "leet-level", help = "Leet depth 0-3 (default 2)", value_name = "N", default_value = "2")]
     pub leet_level: u8,
 
-    #[arg(long = "no-seasons", help = "Disable season bases")]
+    #[arg(help_heading = "Generator Options", long = "no-seasons", help = "Disable season bases")]
     pub no_seasons: bool,
 
-    #[arg(long = "no-keyboard", help = "Disable keyboard-walk bases")]
+    #[arg(help_heading = "Generator Options", long = "no-keyboard", help = "Disable keyboard-walk bases")]
     pub no_keyboard: bool,
 
-    #[arg(short = 'F', long = "filename", help = "Custom filename (without extension) inside wordlists folder", value_name = "NAME")]
+    #[arg(help_heading = "Generator Options", short = 'F', long = "filename", help = "Custom filename (without extension) inside wordlists folder", value_name = "NAME")]
     pub filename: Option<String>,
 
-    #[arg(long = "dir", help = "Custom output directory (default: ./wordlists/)", value_name = "DIR")]
+    #[arg(help_heading = "Generator Options", long = "dir", help = "Custom output directory (default: ./wordlists/)", value_name = "DIR")]
     pub dir: Option<PathBuf>,
 
-    #[arg(short = 'o', long = "output", help = "Exact output file path (overrides --dir/--filename)", value_name = "FILE")]
+    #[arg(help_heading = "Output Options", short = 'o', long = "output", help = "Exact output file path (overrides --dir/--filename)", value_name = "FILE")]
     pub output: Option<PathBuf>,
 }
 
@@ -452,238 +450,241 @@ pub struct Cli {
     pub command: Option<Commands>,
 
     // ── Target ──
-    #[arg(short = 't', long = "target", help = "Target host:port or IP address (support domain/IP local/public)", value_name = "HOST[:PORT]", global = true)]
+    #[arg(help_heading = "1 Target", short = 't', long = "target", help = "Target host:port or IP address (support domain/IP local/public)", value_name = "HOST[:PORT]", global = true)]
     pub targets: Vec<String>,
 
-    #[arg(short = 'l', long = "list", help = "File containing list of target hosts (one per line)", value_name = "FILE", global = true)]
+    #[arg(help_heading = "1 Target", short = 'l', long = "list", help = "File containing list of target hosts (one per line)", value_name = "FILE", global = true)]
     pub target_file: Option<PathBuf>,
 
-    #[arg(short = 'p', long = "port", help = "Port number(s)", value_name = "PORT", global = true)]
+    #[arg(help_heading = "1 Target", short = 'p', long = "port", help = "Port number(s)", value_name = "PORT", global = true)]
     pub ports: Vec<u16>,
 
-    #[arg(short = 'L', long = "list-protocols", help = "List supported protocols and exit", global = true)]
+    #[arg(help_heading = "1 Target", short = 'L', long = "list-protocols", help = "List supported protocols and exit", global = true)]
     pub list_protocols: bool,
 
     // ── Credentials ──
-    #[arg(short = 'u', long = "user", help = "Single username", value_name = "USER", global = true)]
+    #[arg(help_heading = "2 Credentials", short = 'u', long = "user", help = "Single username", value_name = "USER", global = true)]
     pub users: Vec<String>,
 
-    #[arg(short = 'U', long = "user-file", help = "File containing list of usernames (one per line)", value_name = "FILE", global = true)]
+    #[arg(help_heading = "2 Credentials", short = 'U', long = "user-file", help = "File containing list of usernames (one per line)", value_name = "FILE", global = true)]
     pub user_file: Option<PathBuf>,
 
-    #[arg(long = "password", visible_alias = "pwd", help = "Single password", value_name = "PASS", global = true)]
+    #[arg(help_heading = "2 Credentials", short = 'w', long = "password", visible_alias = "pwd", help = "Single password (repeatable)", value_name = "PASS", global = true)]
     pub passwords: Vec<String>,
 
-    #[arg(short = 'W', long = "password-list", visible_alias = "pl", help = "File containing list of passwords (one per line)", value_name = "FILE", global = true)]
+    #[arg(help_heading = "2 Credentials", short = 'W', long = "password-list", visible_alias = "pl", help = "File containing list of passwords (one per line)", value_name = "FILE", global = true)]
     pub password_file: Option<PathBuf>,
 
-    #[arg(short = 'C', long = "combo", help = "Combo list: user:pass per line", value_name = "FILE", global = true)]
+    #[arg(help_heading = "2 Credentials", short = 'C', long = "combo", help = "Combo list: user:pass per line", value_name = "FILE", global = true)]
     pub combo_file: Option<PathBuf>,
 
     // ── Performance ──
-    #[arg(short = 'x', long = "threads", help = "Concurrent workers", default_value = "10", value_name = "N", global = true)]
+    #[arg(help_heading = "3 Performance", short = 'x', long = "threads", help = "Concurrent workers", default_value = "10", value_name = "N", global = true)]
     pub threads: usize,
 
-    #[arg(long = "timeout", help = "Connection timeout (seconds)", default_value = "10", value_name = "SEC", global = true)]
+    #[arg(help_heading = "3 Performance", long = "timeout", help = "Connection timeout (seconds)", default_value = "10", value_name = "SEC", global = true)]
     pub timeout: u64,
 
-    #[arg(long = "delay", help = "Delay between attempts (ms)", default_value = "0", value_name = "MS", global = true)]
+    #[arg(help_heading = "3 Performance", long = "delay", help = "Delay between attempts (ms)", default_value = "0", value_name = "MS", global = true)]
     pub delay: u64,
 
-    #[arg(long = "rate-limit", help = "Max attempts/sec (0=unlimited)", value_name = "N", global = true)]
+    #[arg(help_heading = "3 Performance", long = "rate-limit", help = "Max attempts/sec (0=unlimited)", value_name = "N", global = true)]
     pub rate_limit: Option<u64>,
 
-    #[arg(long = "retries", help = "Connection retries", default_value = "2", value_name = "N", global = true)]
+    #[arg(help_heading = "3 Performance", long = "retries", help = "Connection retries", default_value = "2", value_name = "N", global = true)]
     pub retries: u32,
 
-    #[arg(long = "stop-on-first", help = "Stop after first success per target", global = true)]
-    pub stop_on_first: bool,
-
-    #[arg(long = "spray", help = "Spray mode: try one password across all users before next password (safer against lockout)", global = true)]
+    #[arg(help_heading = "2 Credentials", long = "spray", help = "Spray mode: try one password across all users before next password (safer against lockout)", global = true)]
     pub spray: bool,
 
-    #[arg(long = "single-user", help = "Single-user mode: only first username is tested with all passwords", global = true)]
+    #[arg(help_heading = "2 Credentials", long = "single-user", help = "Single-user mode: only first username is tested with all passwords", global = true)]
     pub single_user: bool,
 
-    #[arg(long = "resume", help = "Resume session file (checkpoint/restore)", value_name = "FILE", global = true)]
-    pub resume: Option<PathBuf>,
-
-    #[arg(long = "config", help = "Load base config from TOML or JSON file (CLI flags override file)", value_name = "FILE", global = true)]
-    pub config_file: Option<PathBuf>,
-
-    #[arg(long = "rule", help = "Password mutation rule file", value_name = "FILE", global = true)]
+    #[arg(help_heading = "4 Hybrid Rules", long = "rule", help = "Password mutation rule file", value_name = "FILE", global = true)]
     pub rule_file: Option<PathBuf>,
 
-    #[arg(long = "max-mutations", help = "Max rule mutations per password", default_value = "500", value_name = "N", global = true)]
+    #[arg(help_heading = "4 Hybrid Rules", long = "max-mutations", help = "Max rule mutations per password", default_value = "500", value_name = "N", global = true)]
     pub max_mutations: usize,
 
-    #[arg(long = "checkpoint", help = "Session checkpoint interval (attempts)", default_value = "100", value_name = "N", global = true)]
+    #[arg(help_heading = "5 Session & Config", long = "resume", help = "Resume session file (checkpoint/restore)", value_name = "FILE", global = true)]
+    pub resume: Option<PathBuf>,
+
+    #[arg(help_heading = "5 Session & Config", long = "config", help = "Load base config from TOML or JSON file (CLI flags override file)", value_name = "FILE", global = true)]
+    pub config_file: Option<PathBuf>,
+
+    #[arg(help_heading = "6 Attack Control", long = "stop-on-first", help = "Stop after first success per target", global = true)]
+    pub stop_on_first: bool,
+
+    #[arg(help_heading = "3 Performance", long = "checkpoint", help = "Session checkpoint interval (attempts)", default_value = "100", value_name = "N", global = true)]
     pub checkpoint: u64,
 
-    #[arg(long = "api-bind", help = "Bind address for REST API mode (default: disabled, local only recommended)", value_name = "ADDR", global = true)]
+    #[arg(help_heading = "6 Attack Control", long = "api-bind", help = "Deprecated: no effect on attacks; use `veltrix serve --bind ADDR` instead", value_name = "ADDR", global = true)]
     pub api_bind: Option<String>,
 
-    #[arg(long = "fp-check", help = "Fingerprint check: re-verify claimed successes to eliminate false positives", global = true)]
+    #[arg(help_heading = "6 Attack Control", long = "fp-check", help = "Fingerprint check: re-verify claimed successes to eliminate false positives", global = true)]
     pub fp_check: bool,
 
-    #[arg(long = "show-secrets", help = "Show full passwords in console, reports, and API (default: masked)", global = true)]
+    #[arg(help_heading = "6 Attack Control", long = "show-secrets", help = "Show full passwords in console, reports, and API (default: masked)", global = true)]
     pub show_secrets: bool,
 
     // ── F4: stealth, spray cadence, limiter, cooldown ──
-    #[arg(long = "spray-interval", help = "Pause between spray rounds, e.g. 30s, 30m, 2h (requires --spray)", value_name = "DUR", default_value = "0", global = true)]
+    #[arg(help_heading = "7 Stealth & Evasion", long = "spray-interval", help = "Pause between spray rounds, e.g. 30s, 30m, 2h (requires --spray)", value_name = "DUR", default_value = "0", global = true)]
     pub spray_interval: String,
 
-    #[arg(long = "spray-jitter", help = "Symmetric jitter percent 0-100 applied to spray interval", value_name = "PCT", default_value = "20", global = true)]
+    #[arg(help_heading = "7 Stealth & Evasion", long = "spray-jitter", help = "Symmetric jitter percent 0-100 applied to spray interval", value_name = "PCT", default_value = "20", global = true)]
     pub spray_jitter: u8,
 
-    #[arg(long = "target-rate-limit", help = "Max attempts/sec per target (in addition to global --rate-limit)", value_name = "N", global = true)]
+    #[arg(help_heading = "7 Stealth & Evasion", long = "target-rate-limit", help = "Max attempts/sec per target (in addition to global --rate-limit)", value_name = "N", global = true)]
     pub target_rate_limit: Option<u64>,
 
-    #[arg(long = "user-cooldown", help = "Minimum interval between attempts for the same username, e.g. 500ms, 5s", value_name = "DUR", default_value = "0", global = true)]
+    #[arg(help_heading = "7 Stealth & Evasion", long = "user-cooldown", help = "Minimum interval between attempts for the same username, e.g. 500ms, 5s", value_name = "DUR", default_value = "0", global = true)]
     pub user_cooldown: String,
 
-    #[arg(long = "lockout-cooldown", help = "Cooldown seconds after an account-lockout signal", value_name = "SEC", default_value = "600", global = true)]
+    #[arg(help_heading = "7 Stealth & Evasion", long = "lockout-cooldown", help = "Cooldown seconds after an account-lockout signal", value_name = "SEC", default_value = "600", global = true)]
     pub lockout_cooldown: u64,
 
-    #[arg(long = "rate-cooldown", help = "Cooldown seconds after a rate-limit signal on a target", value_name = "SEC", default_value = "60", global = true)]
+    #[arg(help_heading = "7 Stealth & Evasion", long = "rate-cooldown", help = "Cooldown seconds after a rate-limit signal on a target", value_name = "SEC", default_value = "60", global = true)]
     pub rate_cooldown: u64,
 
-    #[arg(long = "lockout-pause", help = "Pause for lockout-cooldown then retry instead of skipping the user", global = true)]
+    #[arg(help_heading = "7 Stealth & Evasion", long = "lockout-pause", help = "Pause for lockout-cooldown then retry instead of skipping the user", global = true)]
     pub lockout_pause: bool,
 
-    #[arg(long = "user-agent", help = "Override HTTP User-Agent (default: rotate realistic pool)", value_name = "STR", global = true)]
+    #[arg(help_heading = "7 Stealth & Evasion", long = "user-agent", help = "Override HTTP User-Agent (default: rotate realistic pool)", value_name = "STR", global = true)]
     pub user_agent: Option<String>,
 
-    #[arg(long = "safe-profile", help = "Conservative preset for production-like targets: threads 3, delay 1000ms, rate 5/s, retries 1, stop-on-first", global = true)]
+    #[arg(help_heading = "7 Stealth & Evasion", long = "safe-profile", help = "Conservative preset for production-like targets: threads 3, delay 1000ms, rate 5/s, retries 1, stop-on-first", global = true)]
     pub safe_profile: bool,
 
-    #[arg(long = "aggressive-lab", help = "Aggressive preset for isolated labs only: threads 50, timeout 5s. Blocked for non-lab targets unless --i-understand-risk", global = true)]
+    #[arg(help_heading = "7 Stealth & Evasion", long = "aggressive-lab", help = "Aggressive preset for isolated labs only: threads 50, timeout 5s. Blocked for non-lab targets unless --i-understand-risk", global = true)]
     pub aggressive_lab: bool,
 
-    #[arg(long = "i-understand-risk", help = "Acknowledge risk for aggressive runs against non-lab targets", global = true)]
+    #[arg(help_heading = "7 Stealth & Evasion", long = "i-understand-risk", help = "Acknowledge risk for aggressive runs against non-lab targets", global = true)]
     pub i_understand_risk: bool,
 
     // ── F5: scan-gated attack ──
-    #[arg(long = "only-open", help = "Restrict attack targets to open ports listed in a scan-ports output file", value_name = "FILE", global = true)]
+    #[arg(help_heading = "6 Attack Control", long = "only-open", help = "Restrict attack targets to open ports listed in a scan-ports output file", value_name = "FILE", global = true)]
     pub only_open: Option<PathBuf>,
 
-    #[arg(long = "max-password-len", help = "Truncate passwords to N characters", value_name = "N", global = true)]
+    #[arg(help_heading = "6 Attack Control", long = "max-password-len", help = "Truncate passwords to N characters", value_name = "N", global = true)]
     pub max_password_len: Option<usize>,
 
     // ── Proxy ──
-    #[arg(long = "proxy", help = "Proxy: type://host[:port]", value_name = "PROXY", global = true)]
+    #[arg(help_heading = "8 Proxy & Anonymity", long = "proxy", help = "Proxy: type://host[:port]", value_name = "PROXY", global = true)]
     pub proxy: Option<String>,
 
-    #[arg(long = "proxy-file", help = "Proxy rotation list (one per line)", value_name = "FILE", global = true)]
+    #[arg(help_heading = "8 Proxy & Anonymity", long = "proxy-file", help = "Proxy rotation list (one per line)", value_name = "FILE", global = true)]
     pub proxy_file: Option<PathBuf>,
 
-    #[arg(long = "proxy-chain", help = "Comma-separated proxy chain: type://host:port,...", value_name = "PROXIES", global = true)]
+    #[arg(help_heading = "8 Proxy & Anonymity", long = "proxy-chain", help = "Comma-separated proxy chain: type://host:port,...", value_name = "PROXIES", global = true)]
     pub proxy_chain: Option<String>,
 
-    #[arg(long = "proxy-required", help = "Fail-closed: abort if no proxy is configured (exit 2)", global = true)]
+    #[arg(help_heading = "8 Proxy & Anonymity", long = "proxy-required", help = "Fail-closed: abort if no proxy is configured (exit 2)", global = true)]
     pub proxy_required: bool,
 
-    #[arg(long = "rotate-proxy-every", help = "Rotate egress proxy every N attempts (0 = only on signal)", value_name = "N", default_value = "0", global = true)]
+    #[arg(help_heading = "8 Proxy & Anonymity", long = "rotate-proxy-every", help = "Rotate egress proxy every N attempts (0 = only on signal)", value_name = "N", default_value = "0", global = true)]
     pub rotate_proxy_every: usize,
 
-    #[arg(long = "random-delay", help = "Extra random delay 0..N ms on top of --delay per attempt (anti-rhythm fingerprinting)", value_name = "MS", default_value = "100", global = true)]
+    #[arg(help_heading = "7 Stealth & Evasion", long = "random-delay", help = "Extra random delay 0..N ms on top of --delay per attempt (anti-rhythm fingerprinting)", value_name = "MS", default_value = "100", global = true)]
     pub random_delay: u64,
 
-    #[arg(long = "check-proxy", help = "Pre-flight check: TCP-test every configured proxy and drop dead ones before attacking (fail-closed if all dead)", global = true)]
+    #[arg(help_heading = "8 Proxy & Anonymity", long = "check-proxy", help = "Pre-flight check: TCP-test every configured proxy and drop dead ones before attacking (fail-closed if all dead)", global = true)]
     pub check_proxy: bool,
 
-    #[arg(long = "source-ip", help = "Bind egress sockets to this local IP (VPN/multihomed anonymity)", value_name = "IP", global = true)]
+    #[arg(help_heading = "8 Proxy & Anonymity", long = "source-ip", help = "Bind egress sockets to this local IP (VPN/multihomed anonymity)", value_name = "IP", global = true)]
     pub source_ip: Option<String>,
 
     // ── Output ──
-    #[arg(short = 'o', long = "output", help = "Write results to FILE", value_name = "FILE", global = true)]
+    #[arg(help_heading = "9 Output & Reporting", short = 'o', long = "output", help = "Write results to FILE", value_name = "FILE", global = true)]
     pub output: Option<PathBuf>,
 
-    #[arg(short = 'f', long = "format", help = "Output format: plain, json, csv, html, yaml", default_value = "plain", value_name = "FMT", global = true)]
+    #[arg(help_heading = "9 Output & Reporting", short = 'f', long = "format", help = "Output format: plain, json, csv, html, yaml", default_value = "plain", value_name = "FMT", global = true)]
     pub format: String,
 
     // ── Plugin ──
-    #[arg(long = "plugin", help = "External plugin binary path (repeatable)", value_name = "PATH", global = true)]
+    #[arg(help_heading = "10 Plugins & Encryption", long = "plugin", help = "External plugin binary path (repeatable)", value_name = "PATH", global = true)]
     pub plugins: Vec<String>,
 
-    #[arg(long = "list-plugin", help = "List all registered plugins and exit", global = true)]
+    #[arg(help_heading = "10 Plugins & Encryption", long = "list-plugin", help = "List all registered plugins and exit", global = true)]
     pub list_plugin: bool,
 
     // ── Encrypt ──
-    #[arg(long = "encrypt", help = "Encrypt output file with AES-256-GCM", global = true)]
+    #[arg(help_heading = "10 Plugins & Encryption", long = "encrypt", help = "Encrypt output file with AES-256-GCM", global = true)]
     pub encrypt: bool,
 
-    #[arg(long = "encrypt-passphrase", help = "Passphrase for encryption (prompted if not provided)", value_name = "PASSPHRASE", global = true)]
+    #[arg(help_heading = "10 Plugins & Encryption", long = "encrypt-passphrase", help = "Passphrase for encryption (prompted if not provided)", value_name = "PASSPHRASE", global = true)]
     pub encrypt_passphrase: Option<String>,
 
     // ── Decrypt ──
-    #[arg(long = "decrypt", help = "Decrypt an encrypted file", value_name = "FILE", global = true)]
+    #[arg(help_heading = "10 Plugins & Encryption", long = "decrypt", help = "Decrypt an encrypted file", value_name = "FILE", global = true)]
     pub decrypt_file: Option<PathBuf>,
 
-    #[arg(long = "decrypt-output", help = "Output path for decrypted file (default: stdout)", value_name = "FILE", global = true)]
+    #[arg(help_heading = "10 Plugins & Encryption", long = "decrypt-output", help = "Output path for decrypted file (default: stdout)", value_name = "FILE", global = true)]
     pub decrypt_output: Option<PathBuf>,
 
     // ── Wordlist Generation ──
-    #[arg(long = "gen-wordlist", help = "Generate a wordlist from target information", global = true)]
+    #[arg(help_heading = "11 Wordlist Generator", long = "gen-wordlist", help = "Generate a wordlist from target information", global = true)]
     pub gen_wordlist: bool,
 
-    #[arg(long = "wl-name", help = "Target name (e.g. 'John Smith')", value_name = "NAME", global = true)]
+    #[arg(help_heading = "11 Wordlist Generator", long = "wl-name", help = "Target name (e.g. 'John Smith')", value_name = "NAME", global = true)]
     pub wl_name: Option<String>,
 
-    #[arg(long = "wl-company", help = "Company name", value_name = "COMPANY", global = true)]
+    #[arg(help_heading = "11 Wordlist Generator", long = "wl-company", help = "Company name", value_name = "COMPANY", global = true)]
     pub wl_company: Option<String>,
 
-    #[arg(long = "wl-dob", help = "Date of birth (YYYY-MM-DD)", value_name = "DATE", global = true)]
+    #[arg(help_heading = "11 Wordlist Generator", long = "wl-dob", help = "Date of birth (YYYY-MM-DD)", value_name = "DATE", global = true)]
     pub wl_dob: Option<String>,
 
-    #[arg(long = "wl-keyword", help = "Additional keyword (repeatable)", value_name = "WORD", global = true)]
+    #[arg(help_heading = "11 Wordlist Generator", long = "wl-keyword", help = "Additional keyword (repeatable)", value_name = "WORD", global = true)]
     pub wl_keywords: Vec<String>,
 
-    #[arg(long = "wl-min-len", help = "Minimum password length", default_value = "4", value_name = "N", global = true)]
+    #[arg(help_heading = "11 Wordlist Generator", long = "wl-min-len", help = "Minimum password length", default_value = "4", value_name = "N", global = true)]
     pub wl_min_len: usize,
 
-    #[arg(long = "wl-max-len", help = "Maximum password length", default_value = "32", value_name = "N", global = true)]
+    #[arg(help_heading = "11 Wordlist Generator", long = "wl-max-len", help = "Maximum password length", default_value = "32", value_name = "N", global = true)]
     pub wl_max_len: usize,
 
-    #[arg(long = "wl-no-leet", help = "Disable leet speak variations", global = true)]
+    #[arg(help_heading = "11 Wordlist Generator", long = "wl-no-leet", help = "Disable leet speak variations", global = true)]
     pub wl_no_leet: bool,
 
-    #[arg(long = "wl-leet-level", help = "Leet depth 0-3 (0 off, 1 single, 2 combos, 3 +case)", value_name = "N", default_value = "2", global = true)]
+    #[arg(help_heading = "11 Wordlist Generator", long = "wl-leet-level", help = "Leet depth 0-3 (0 off, 1 single, 2 combos, 3 +case)", value_name = "N", default_value = "2", global = true)]
     pub wl_leet_level: u8,
 
-    #[arg(long = "wl-no-seasons", help = "Disable season bases (spring/summer/...)", global = true)]
+    #[arg(help_heading = "11 Wordlist Generator", long = "wl-no-seasons", help = "Disable season bases (spring/summer/...)", global = true)]
     pub wl_no_seasons: bool,
 
-    #[arg(long = "wl-no-keyboard", help = "Disable keyboard-walk bases (qwerty/123456/...)", global = true)]
+    #[arg(help_heading = "11 Wordlist Generator", long = "wl-no-keyboard", help = "Disable keyboard-walk bases (qwerty/123456/...)", global = true)]
     pub wl_no_keyboard: bool,
 
-    #[arg(long = "wl-output", help = "Write wordlist to file (default: stdout)", value_name = "FILE", global = true)]
+    #[arg(help_heading = "11 Wordlist Generator", long = "wl-output", help = "Write wordlist to file (default: stdout)", value_name = "FILE", global = true)]
     pub wl_output: Option<PathBuf>,
 
     // ── ML Password Prediction ──
-    #[arg(long = "ml-train", help = "Train Markov model on a wordlist file", value_name = "FILE", global = true)]
+    #[arg(help_heading = "12 ML Prediction", long = "ml-train", help = "Train Markov model on a wordlist file", value_name = "FILE", global = true)]
     pub ml_train: Option<PathBuf>,
 
-    #[arg(long = "ml-generate", help = "Generate N passwords from trained model (use after --ml-train)", value_name = "N", global = true)]
+    #[arg(help_heading = "12 ML Prediction", long = "ml-generate", help = "Generate N passwords from trained model (use after --ml-train)", value_name = "N", global = true)]
     pub ml_generate: Option<usize>,
 
-    #[arg(long = "ml-order", help = "Markov chain order (default: 3)", default_value = "3", value_name = "N", global = true)]
+    #[arg(help_heading = "12 ML Prediction", long = "ml-order", help = "Markov chain order (default: 3)", default_value = "3", value_name = "N", global = true)]
     pub ml_order: usize,
 
-    #[arg(long = "ml-max-len", help = "Max generated password length (default: 24)", default_value = "24", value_name = "N", global = true)]
+    #[arg(help_heading = "12 ML Prediction", long = "ml-max-len", help = "Max generated password length (default: 24)", default_value = "24", value_name = "N", global = true)]
     pub ml_max_len: usize,
 
-    #[arg(long = "ml-score", help = "Score password(s) from a file (one per line) against the trained model", value_name = "FILE", global = true)]
+    #[arg(help_heading = "12 ML Prediction", long = "ml-score", help = "Score password(s) from a file (one per line) against the trained model", value_name = "FILE", global = true)]
     pub ml_score: Option<PathBuf>,
 
-    #[arg(long = "ml-output", help = "Output file for generated passwords", value_name = "FILE", global = true)]
+    #[arg(help_heading = "12 ML Prediction", long = "ml-output", help = "Output file for generated passwords", value_name = "FILE", global = true)]
     pub ml_output: Option<PathBuf>,
 
     // ── Verbose ──
-    #[arg(short = 'v', long = "verbose", action = clap::ArgAction::Count, help = "Verbose level 1 (-v) or verbose level 2 (-vv)", global = true)]
+    #[arg(help_heading = "13 Verbosity", short = 'v', long = "verbose", action = clap::ArgAction::Count, help = "Verbose level 1 (-v) or verbose level 2 (-vv)", global = true)]
     pub verbose: u8,
 
-    #[arg(long = "dry-run", help = "Show attack plan without sending any network traffic", global = true)]
+    #[arg(help_heading = "13 Verbosity", short = 'q', long = "quiet", help = "Quiet mode: successes only, no progress dashboard", global = true)]
+    pub quiet: bool,
+
+    #[arg(help_heading = "6 Attack Control", long = "dry-run", help = "Show attack plan without sending any network traffic", global = true)]
     pub dry_run: bool,
 }
 
@@ -778,7 +779,7 @@ impl Cli {
             http_passfield: args.http_passfield.clone(),
             http_success: args.http_success.clone(),
             verbose: self.verbose,
-            quiet: false,
+            quiet: self.quiet,
             no_banner: false,
             single_user_mode: self.single_user,
             spray_mode: self.spray,
@@ -1165,7 +1166,9 @@ Verify installation:
                       rabbitmq, activemq, kafka, sip, rtsp, tomcat, jenkins,
                       gitlab, sonarqube, docker, kubernetes, vault, consul,
                       vmware, ilo, ipmi, xmpp, irc, nntp, cvs, svn, rexec,
-                      rlogin, squid, memcached, scan-ports, create, man, how
+                      rlogin, squid, memcached,
+                      scan-ports, auto, create, wordlist, check-ip, validate,
+                      completion, serve, dist-coordinator, dist-worker, man
 
 ────────────────────────────────────────────────────────────────────────────────
 4. PROTOCOLS OVERVIEW
@@ -1235,9 +1238,9 @@ Users — three modes (combined automatically when both specified):
   Both -u and -U can be used simultaneously; all users are merged.
 
 Passwords — three modes (combined automatically when both specified):
-  --password, --pwd PASS     Single password (repeatable)
+  -w, --password, --pwd PASS Single password (repeatable)
   -W, --password-list FILE   File with one password per line
-  Both --password and -W can be used simultaneously; all passwords are merged.
+  Both -w/--password and -W can be used simultaneously; all passwords are merged.
 
 Combo list (alternative to separate user/password files):
   -C, --combo FILE           user:pass pairs, one per line
@@ -1345,6 +1348,7 @@ Smart Credential Merging:
   -v, --verbose              Verbosity level:
                                1x (-v)    Show failed attempts
                                2x (-vv)   Show debug info + rate stats
+  -q, --quiet                Quiet mode: successes only, no progress dashboard
 
   --encrypt                  Encrypt output file with AES-256-GCM
   --encrypt-passphrase TEXT  Passphrase for encryption (prompted if omitted)

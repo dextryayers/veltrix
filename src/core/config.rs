@@ -257,7 +257,7 @@ impl AttackConfig {
             w.push("HTTP via proxy-chain currently uses the first proxy for reqwest. Chain is honored for raw TCP protocols; HTTP chain support is partial.".into());
         }
         if self.api_bind.is_some() {
-            w.push("API bind is enabled without built-in auth/TLS. Bind to 127.0.0.1 or put behind authenticated reverse proxy.".into());
+            w.push("--api-bind has no effect on attack subcommands (deprecated); use `veltrix serve --bind ADDR` to run the REST API + Web UI.".into());
         }
         if self.timeout.as_secs() < 3 {
             w.push("Timeout below 3s can cause false negatives on slow networks. Use 5-10s unless lab is local.".into());
@@ -274,6 +274,9 @@ impl AttackConfig {
         }
         if self.safe_profile {
             w.push("Safe profile active: conservative threads/delay/rate for production-like targets.".into());
+        }
+        if self.verbose > 0 && self.quiet {
+            w.push("Both --verbose and --quiet set; quiet wins (successes only).".into());
         }
         w
     }

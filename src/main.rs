@@ -224,7 +224,7 @@ async fn main() {
         Some(Commands::Rlogin(ref a)) => run_attack(&cli, "rlogin", a, running).await,
         Some(Commands::Squid(ref a)) => run_attack(&cli, "squid", a, running).await,
         Some(Commands::Memcached(ref a)) => run_attack(&cli, "memcached", a, running).await,
-        Some(Commands::Man) | Some(Commands::How) => print_manual(),
+        Some(Commands::Man) => print_manual(),
         Some(Commands::CheckIp(ref a)) => run_check_ip(&cli, a).await,
         Some(Commands::Create(ref a)) => run_create(a).await,
         Some(Commands::Wordlist(ref w)) => match &w.command {
@@ -1069,6 +1069,7 @@ fn default_cli_for_validate() -> Cli {
         ml_score: None,
         ml_output: None,
         verbose: 0,
+        quiet: false,
         dry_run: false,
     }
 }

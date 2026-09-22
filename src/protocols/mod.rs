@@ -194,6 +194,29 @@ mod tests {
     }
 
     #[test]
+    fn test_registry_in_sync() {
+        // Anti-drift: setiap protokol di list HARUS punya handler di
+        // get_protocol, dan jumlahnya HARUS 47 (sinkron dengan CLI help).
+        let listed = list_protocols();
+        assert_eq!(listed.len(), 47, "registry drift: {:?}", listed);
+        let mut sorted = listed.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), listed.len(), "duplicate entries in list_protocols");
+        for name in &listed {
+            assert!(
+                get_protocol(name).is_some(),
+                "listed protocol '{}' has no handler in get_protocol",
+                name
+            );
+        }
+        // Handler yang tadinya hilang dari list (regresi nyata): consul, cvs.
+        for must in ["consul", "cvs", "ssh", "http", "smb"] {
+            assert!(listed.contains(&must), "'{}' missing from list_protocols", must);
+        }
+    }
+
+    #[test]
     fn test_get_protocol_ftp() {
         let p = get_protocol("ftp");
         assert!(p.is_some());
@@ -279,5 +302,5 @@ mod tests {
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn list_protocols() -> Vec<&'static str> {
-    vec!["activemq", "cassandra", "couchdb", "docker", "elasticsearch", "firebird", "ftp", "gitlab", "http", "ilo", "imap", "ipmi", "irc", "jenkins", "kafka", "kubernetes", "ldap", "memcached", "mongodb", "mssql", "mysql", "nntp", "oracle", "pop3", "postgres", "rabbitmq", "rdp", "redis", "rexec", "rlogin", "rtsp", "sip", "smb", "smtp", "snmp", "sonarqube", "squid", "ssh", "svn", "telnet", "tomcat", "vault", "vmware", "vnc", "xmpp"]
+    vec!["activemq", "cassandra", "consul", "couchdb", "cvs", "docker", "elasticsearch", "firebird", "ftp", "gitlab", "http", "ilo", "imap", "ipmi", "irc", "jenkins", "kafka", "kubernetes", "ldap", "memcached", "mongodb", "mssql", "mysql", "nntp", "oracle", "pop3", "postgres", "rabbitmq", "rdp", "redis", "rexec", "rlogin", "rtsp", "sip", "smb", "smtp", "snmp", "sonarqube", "squid", "ssh", "svn", "telnet", "tomcat", "vault", "vmware", "vnc", "xmpp"]
 }
