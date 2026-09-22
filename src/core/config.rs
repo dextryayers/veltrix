@@ -43,6 +43,9 @@ pub struct AttackConfig {
     pub http_success: Option<String>,
     pub spray_mode: bool,
     pub stop_on_first: bool,
+    /// --yes: jangan pernah prompt tiap temuan; sikat semua kombinasi
+    /// dari awal sampai akhir lalu beri summary.
+    pub no_prompt: bool,
     pub retries: u32,
     pub rule_file: Option<PathBuf>,
     pub max_mutations: usize,
@@ -320,6 +323,7 @@ mod tests {
             http_success: None,
             spray_mode: false,
             stop_on_first: false,
+            no_prompt: false,
             retries: 1,
             rule_file: None,
             max_mutations: 500,

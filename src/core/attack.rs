@@ -784,6 +784,24 @@ impl AttackOrchestrator {
                 log::info!("stop-on-first enabled, halting after first success");
                 return false;
             }
+            // --yes: jangan pernah prompt, sikat semua kombinasi sampai habis.
+            if config.no_prompt {
+                log::info!(
+                    "credential #{} found, continuing to end of list (--yes)",
+                    successes_global
+                );
+                return true;
+            }
+            // Non-interaktif (pipe/file/CI): stdin bukan TTY → read_line akan
+            // EOF dan TERJEMAHKAN sebagai "tidak" sehingga attack berhenti di
+            // tengah. Auto-lanjut agar run selalu tuntas sampai akhir.
+            if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+                log::info!(
+                    "credential #{} found, continuing to end of list (non-interactive stdin)",
+                    successes_global
+                );
+                return true;
+            }
             let answer = match multi {
                 Some(m) => tokio::task::block_in_place(|| prompt_sync(successes_global, m)),
                 None => prompt_plain_sync(successes_global),

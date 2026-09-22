@@ -309,6 +309,7 @@ async fn run_job_task(state: AppState, job_id: String) {
         http_success: None,
         spray_mode: false,
         stop_on_first: false,
+        no_prompt: true,
         retries: 1,
         rule_file: None,
         max_mutations: 500,

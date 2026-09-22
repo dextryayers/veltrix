@@ -358,6 +358,7 @@ mod tests {
             http_success: None,
             spray_mode: false,
             stop_on_first: false,
+            no_prompt: false,
             retries: 1,
             rule_file: None,
             max_mutations: 500,

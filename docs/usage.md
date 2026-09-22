@@ -30,7 +30,9 @@ veltrix auto -t 10.0.0.0/24 --policy policy.toml
 
 `--dry-run` selalu menampilkan total kombinasi + estimasi waktu + `Rules:`
 bila `--rule` dipakai. `-w` = `--password` singkat; `-q/--quiet` = hanya
-sukses (tanpa dashboard). Exit code: `0` ada temuan, `1` nihil/gagal,
+sukses (tanpa dashboard). **`-y/--yes` = sikat SEMUA kombinasi dari awal
+user.txt + pass.txt sampai akhir tanpa prompt, lalu summary** (wajib untuk
+run panjang/pipe/CI agar tidak berhenti di tengah). Exit code: `0` ada temuan, `1` nihil/gagal,
 `2` config invalid, `130` interupsi.
 
 ## 4. Profil keamanan operasional

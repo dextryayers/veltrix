@@ -1,7 +1,6 @@
 # Changelog Veltrix
 
 ## v2.0.1 (2026-09-22) — CLI polish + password tampil penuh default
-
 - **Password tampil penuh default** saat attack (console, plain/csv/html,
   auto-report): `root:admin123` bukan `root:a***`. Mask hanya bila
   `--hide-secrets` (alias `--mask`). Flag lama `--show-secrets` tetap
@@ -16,6 +15,9 @@
 - **Fix registry drift**: `consul` + `cvs` hilang dari `list_protocols()`
   (man header klaim 45) → 47 sinkron + regression test.
 - Klaim "47 protokol" diselaraskan ke registry sebagai source of truth.
+- **`-y/--yes`**: run SEMUA kombinasi awal→akhir tanpa prompt + summary;
+  stdin non-TTY (pipe/CI) juga auto-lanjut (sebelumnya EOF = "tidak" =
+  berhenti tengah jalan).
 
 ## v2.0.0 (2026-09-22) — Fase 8 + 9: Wordlist/ML + QA/Rilis + Anonimitas
 

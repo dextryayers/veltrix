@@ -1011,6 +1011,7 @@ fn default_cli_for_validate() -> Cli {
         rate_limit: None,
         retries: 2,
         stop_on_first: false,
+        no_prompt: false,
         spray: false,
         single_user: false,
         resume: None,

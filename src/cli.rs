@@ -515,6 +515,9 @@ pub struct Cli {
     #[arg(help_heading = "6 Attack Control", long = "stop-on-first", help = "Stop after first success per target", global = true)]
     pub stop_on_first: bool,
 
+    #[arg(help_heading = "6 Attack Control", long = "yes", short = 'y', help = "Never prompt on found credentials; run ALL combinations start-to-finish, then summary", global = true)]
+    pub no_prompt: bool,
+
     #[arg(help_heading = "3 Performance", long = "checkpoint", help = "Session checkpoint interval (attempts)", default_value = "100", value_name = "N", global = true)]
     pub checkpoint: u64,
 
@@ -787,6 +790,7 @@ impl Cli {
             single_user_mode: self.single_user,
             spray_mode: self.spray,
             stop_on_first,
+            no_prompt: self.no_prompt,
             retries,
             rule_file: self.rule_file.clone(),
             max_mutations: self.max_mutations,
