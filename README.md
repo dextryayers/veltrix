@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Docker-blue?style=flat-square" alt="Platform" />
   <img src="https://img.shields.io/badge/protocols-47-success?style=flat-square" alt="Protocols" />
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License" />
-  <img src="https://img.shields.io/badge/version-1.2.0-red?style=flat-square" alt="Version" />
+  <img src="https://img.shields.io/badge/version-2.0.0-red?style=flat-square" alt="Version" />
 </p>
 
 > **Authorized testing only. Unauthorized use against systems you do not own or have explicit written permission to test is ILLEGAL.**
@@ -1257,8 +1257,7 @@ If you are unsure whether an action is permitted, assume it is **not permitted**
 ## 25. License and Credits
 
 - Package name: `veltrix`
-- Current Cargo version: `1.0.0`
-- CLI version string: `1.2.0`
+- Current version: `2.0.0` (single source: `Cargo.toml`; CLI/banner/man mengikuti otomatis)
 - Author: `aniippxploit`
 - Description: Multi-protocol brute force toolkit for security professionals
 

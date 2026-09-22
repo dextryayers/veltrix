@@ -1,6 +1,7 @@
 /target
 /target.old/
 target/
+dist/
 
 # Rust artifacts
 **/*.rs.bk

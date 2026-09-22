@@ -390,7 +390,7 @@ pub struct CreateArgs {
     name = "veltrix",
     version = env!("CARGO_PKG_VERSION"),
     about = "\
-VELTRIX v1.2 - Multi-Protocol Brute Force Toolkit - By AniipID
+VELTRIX v2.0 - Multi-Protocol Brute Force Toolkit - By AniipID
 
 \u{26a0}  Authorized testing only. Unauthorized use is ILLEGAL.
 
@@ -405,7 +405,7 @@ High-performance brute force & security auditing platform with smart
 credential merger (combines -u/-U and --password/-W automatically) and
 real-time adaptive progress tracking for all 47 protocols.",
     long_about = concat!(
-        "VELTRIX v1.2 - Multi-Protocol Brute Force Toolkit - By AniipID\n",
+        "VELTRIX v2.0 - Multi-Protocol Brute Force Toolkit - By AniipID\n",
         "=========================================================\n\n",
         "High-performance brute force & security auditing platform.\n",
         "47 protocols · smart credential merging · adaptive progress tracking.\n\n",
@@ -1115,7 +1115,7 @@ TABLE OF CONTENTS
 1. INTRODUCTION
 ────────────────────────────────────────────────────────────────────────────────
 
-VELTRIX v1.2 is a high-performance multi-protocol brute force toolkit supporting
+VELTRIX v2.0 is a high-performance multi-protocol brute force toolkit supporting
 47 network protocols. It is designed for authorized security auditing, penetration
 testing, and password strength assessment.
 
@@ -1650,7 +1650,7 @@ PROBLEM: "Thread pool panic" or crashes with large wordlists
   security research only. Misuse may result in criminal prosecution.
 
 ════════════════════════════════════════════════════════════════════════════════
-              End of VELTRIX v1.2 User Manual — By AniipID
+              End of VELTRIX v2.0 User Manual — By AniipID
 ════════════════════════════════════════════════════════════════════════════════
 "#;
     let _ = std::io::stdout().write_all(manual.as_bytes());
