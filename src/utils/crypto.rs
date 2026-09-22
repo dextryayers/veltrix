@@ -81,7 +81,7 @@ pub fn hex_encode(data: &[u8]) -> String {
         out.push(hex_chars[(byte >> 4) as usize]);
         out.push(hex_chars[(byte & 0x0f) as usize]);
     }
-    unsafe { String::from_utf8_unchecked(out) }
+    String::from_utf8(out).unwrap_or_default()
 }
 
 pub fn hex_decode(hex: &str) -> Result<Vec<u8>, String> {

@@ -2,9 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use std::io::{Write, stdout};
-use tokio::net::TcpStream;
 use tokio::sync::Semaphore;
-use tokio::time::timeout;
 use colored::Colorize;
 
 use super::{ScanResult, BannerGrabber, ServiceDb};
@@ -219,7 +217,7 @@ async fn scan_port(
                     latency_ms,
                 });
             }
-            Ok(Err(e)) | Err(e) => {
+            Err(e) => {
                 let err_str = e.to_string();
                 if attempt < max_retries {
                     if err_str.contains("refused")

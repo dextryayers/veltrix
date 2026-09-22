@@ -287,6 +287,7 @@ async fn run_scan(cli: &Cli, args: &cli::ScanPortsArgs, running: Arc<AtomicBool>
         banner_grab: !args.no_banner,
         retries: 0,
         show_progress: true,
+        shuffle: args.shuffle,
     };
 
     let scanner = crate::scanner::Scanner::new(config, running.clone());
@@ -407,6 +408,7 @@ async fn run_auto(cli: &Cli, args: &cli::AutoArgs, running: Arc<AtomicBool>) {
         banner_grab: !args.scan.no_banner,
         retries: 0,
         show_progress: true,
+        shuffle: args.scan.shuffle,
     };
     let scanner = crate::scanner::Scanner::new(scan_config, running.clone());
     let results = scanner.scan().await;

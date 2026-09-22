@@ -33,12 +33,11 @@ pub fn parse_null_terminated(input: &[u8]) -> IResult<&[u8], &[u8]> {
 pub fn parse_line(input: &[u8]) -> IResult<&[u8], &[u8]> {
     alt((
         map(take_until("\r\n"), |line: &[u8]| {
-            let remaining = &input[line.len() + 2..];
-            unsafe { std::slice::from_raw_parts(line.as_ptr(), line.len()) }
+            let _remaining = &input[line.len() + 2..];
+            let _ = _remaining;
+            &input[..line.len()]
         }),
-        map(take_until("\n"), |line: &[u8]| {
-            unsafe { std::slice::from_raw_parts(line.as_ptr(), line.len()) }
-        }),
+        map(take_until("\n"), |line: &[u8]| line),
     ))(input)
 }
 

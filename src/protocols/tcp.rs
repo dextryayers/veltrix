@@ -111,3 +111,41 @@ pub async fn connect_race(
 pub fn alloc_read_buf() -> Vec<u8> {
     vec![0u8; 131072]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_ip_default_none() {
+        // Hanya baca; tidak mengubah global agar aman paralel.
+        let _ = source_ip();
+    }
+
+    #[tokio::test]
+    async fn connect_bound_uses_source_ip() {
+        // Listener lokal + source 127.0.0.1: connect harus sukses dan
+        // socket server melihat peer 127.0.0.1.
+        set_source_ip(Some("127.0.0.1".parse().unwrap()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let accept = tokio::spawn(async move {
+            let (sock, peer) = listener.accept().await.unwrap();
+            (peer, sock)
+        });
+        let addr = format!("127.0.0.1:{}", port);
+        let client = connect_bound(&addr, Duration::from_secs(5)).await.expect("connect via source bind");
+        drop(client);
+        let (peer, _) = accept.await.unwrap();
+        assert_eq!(peer.ip().to_string(), "127.0.0.1");
+        set_source_ip(None);
+    }
+
+    #[tokio::test]
+    async fn connect_bound_no_source_plain() {
+        set_source_ip(None);
+        // Port tertutup: harus error cepat, bukan panic.
+        let r = connect_bound("127.0.0.1:59999", Duration::from_secs(2)).await;
+        assert!(r.is_err());
+    }
+}
