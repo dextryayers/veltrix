@@ -225,9 +225,11 @@ async fn main() {
         Some(Commands::Squid(ref a)) => run_attack(&cli, "squid", a, running).await,
         Some(Commands::Memcached(ref a)) => run_attack(&cli, "memcached", a, running).await,
         Some(Commands::Man) | Some(Commands::How) => print_manual(),
+        Some(Commands::CheckIp(ref a)) => run_check_ip(&cli, a).await,
         Some(Commands::Create(ref a)) => run_create(a).await,
         Some(Commands::Wordlist(ref w)) => match &w.command {
             cli::WordlistCommand::Rank(ref a) => run_wordlist_rank(a),
+            cli::WordlistCommand::Eval(ref a) => run_wordlist_eval(a),
         },
         Some(Commands::Validate(ref a)) => run_validate(a),
         Some(Commands::Completion(ref a)) => run_completion(a),
@@ -768,6 +770,134 @@ fn run_wordlist_rank(args: &cli::RankArgs) {
     }
 }
 
+/// F8.4: `veltrix wordlist eval --ranked RANKED --relevant HELDOUT --k 10,20,50`.
+/// Menghitung precision@K agar klaim "ML menaikkan hit rate" ada angkanya.
+/// Format RANKED: baris `password<TAB>skor` (output `wordlist rank`, sudah
+/// terurut probable-first). RELEVANT: satu password per baris (held-out).
+fn run_wordlist_eval(args: &cli::EvalArgs) {
+    use crate::utils::ml_predict::{parse_k_list, MarkovChain};
+    use std::collections::HashSet;
+    let ks = match parse_k_list(&args.k) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Config error: {}", e);
+            std::process::exit(EXIT_CONFIG);
+        }
+    };
+    let ranked_raw = std::fs::read_to_string(&args.ranked).unwrap_or_else(|e| {
+        eprintln!("Failed to read {}: {}", args.ranked.display(), e);
+        std::process::exit(EXIT_CONFIG);
+    });
+    let mut ranked: Vec<(String, f64)> =
+        crate::utils::ml_predict::parse_ranked_lines(&ranked_raw);
+    if ranked.is_empty() {
+        eprintln!("Config error: ranked file is empty");
+        std::process::exit(EXIT_CONFIG);
+    }
+    let rel_raw = std::fs::read_to_string(&args.relevant).unwrap_or_else(|e| {
+        eprintln!("Failed to read {}: {}", args.relevant.display(), e);
+        std::process::exit(EXIT_CONFIG);
+    });
+    let relevant: HashSet<String> = rel_raw
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    if relevant.is_empty() {
+        eprintln!("Config error: relevant file is empty");
+        std::process::exit(EXIT_CONFIG);
+    }
+    println!("ranked={} relevant={} K={:?}", ranked.len(), relevant.len(), ks);
+    for k in ks {
+        let p = MarkovChain::precision_at_k(&ranked, &relevant, k);
+        let hits = ranked.iter().take(k.min(ranked.len()))
+            .filter(|(w, _)| relevant.contains(w)).count();
+        println!("precision@{:<6} {:.4}  ({}/{} hits in top {})",
+            k, p, hits, k.min(ranked.len()), k.min(ranked.len()));
+    }
+}
+
+/// ANON A4: `veltrix check-ip [--proxy ...]` — verifikasi egress cover
+/// SEBELUM menyerang. Keluar 0 bila IP terlihat sesuai harapan (via proxy),
+/// 1 bila gagal, 2 bila tanpa proxy (operator harus sadar IP asli terekspos).
+async fn run_check_ip(cli: &Cli, args: &cli::CheckIpArgs) {
+    use crate::proxy::ProxyConfig;
+    print_banner();
+    // Kumpulkan proxy dari flag global (sama seperti path attack).
+    let mut proxies = Vec::new();
+    if let Some(ref pf) = cli.proxy_file {
+        match crate::proxy::load_proxy_list(pf) {
+            Ok(mut v) => proxies.append(&mut v),
+            Err(e) => exit_config(&format!("cannot load --proxy-file: {}", e)),
+        }
+    }
+    if let Some(ref single) = cli.proxy {
+        match ProxyConfig::parse(single) {
+            Ok(p) => proxies.push(p),
+            Err(e) => exit_config(&format!("invalid --proxy: {}", e)),
+        }
+    }
+    if let Some(ref chain) = cli.proxy_chain {
+        let hops: Vec<ProxyConfig> = chain
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| ProxyConfig::parse(s).ok())
+            .collect();
+        if hops.is_empty() {
+            exit_config("invalid --proxy-chain: no parsable hops");
+        }
+        // check-ip hanya memakai hop pertama (reqwest single-hop, jujur).
+        if hops.len() > 1 {
+            eprintln!("note: check-ip uses the first chain hop only (HTTP single-hop limit)");
+        }
+        proxies.push(hops.into_iter().next().unwrap());
+    }
+
+    let proxy_opt: Option<ProxyConfig> = proxies.into_iter().next();
+    match proxy_opt.as_ref() {
+        Some(p) => println!("  egress via {}", p.display()),
+        None => {
+            eprintln!("  [!] NO PROXY — this will expose your real IP.");
+            eprintln!("      Continue only for lab-local targets you own.");
+        }
+    }
+    let timeout = std::time::Duration::from_secs(args.timeout.max(1));
+    let ua = crate::protocols::transport::next_user_agent();
+    let (client, warning) =
+        crate::protocols::transport::build_reqwest_client(timeout, &proxy_opt, &ua);
+    if let Some(w) = warning {
+        eprintln!("  note: {}", w);
+    }
+    let client = match client {
+        Ok(c) => c,
+        Err(e) => exit_config(&e),
+    };
+    match tokio::time::timeout(timeout, client.get(&args.url).send()).await {
+        Ok(Ok(resp)) => match resp.text().await {
+            Ok(ip) => {
+                let ip = ip.trim().to_string();
+                println!("  egress IP: {}", ip);
+                if proxy_opt.is_none() {
+                    std::process::exit(EXIT_CONFIG);
+                }
+            }
+            Err(e) => {
+                eprintln!("check-ip: cannot read echo response: {}", e);
+                std::process::exit(EXIT_NOT_FOUND);
+            }
+        },
+        Ok(Err(e)) => {
+            eprintln!("check-ip: egress request failed: {}", e);
+            std::process::exit(EXIT_NOT_FOUND);
+        }
+        Err(_) => {
+            eprintln!("check-ip: timed out after {}s", args.timeout);
+            std::process::exit(EXIT_NOT_FOUND);
+        }
+    }
+}
+
 async fn run_create(args: &CreateArgs) {
     let cfg = WordlistConfig {
         name: args.name.clone(),
@@ -909,6 +1039,8 @@ fn default_cli_for_validate() -> Cli {
         proxy_chain: None,
         proxy_required: false,
         rotate_proxy_every: 0,
+        random_delay: 100,
+        check_proxy: false,
         source_ip: None,
         output: None,
         format: "plain".into(),

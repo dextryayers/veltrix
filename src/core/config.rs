@@ -84,6 +84,10 @@ pub struct AttackConfig {
     pub proxy_required: bool,
     pub rotate_proxy_every: usize,
     pub source_ip: Option<std::net::IpAddr>,
+    // ANON A2: jitter acak 0..=N ms di atas --delay (anti-fingerprinting ritme).
+    pub delay_jitter_ms: u64,
+    // ANON A3: pre-flight check proxy (fail-closed bila semua mati).
+    pub check_proxy: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -343,6 +347,8 @@ mod tests {
             proxy_required: false,
             rotate_proxy_every: 0,
             source_ip: None,
+            delay_jitter_ms: 100,
+            check_proxy: false,
             show_secrets: false,
         }
     }

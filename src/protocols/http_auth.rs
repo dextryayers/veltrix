@@ -63,8 +63,13 @@ pub async fn http_basic_auth(
             .basic_auth(&credential.username, Some(&credential.password))
             .send()).await
     } else {
+        // ANON: client global dipakai ulang untuk hemat koneksi, tapi UA
+        // dirotasi PER REQUEST via header override — tanpa ini ribuan
+        // attempt memakai satu UA statis dan mudah di-fingerprint.
+        let ua = super::transport::next_user_agent();
         tokio::time::timeout(timeout_dur, global_client()
             .get(url)
+            .header(reqwest::header::USER_AGENT, ua)
             .basic_auth(&credential.username, Some(&credential.password))
             .send()).await
     };

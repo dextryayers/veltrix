@@ -123,6 +123,57 @@ impl MarkovChain {
     }
 }
 
+/// F8.4: parse daftar K dari `--k "10,20,50"`. Non-angka dilewati dengan
+/// warning string; kosong total = error.
+pub fn parse_k_list(s: &str) -> Result<Vec<usize>, String> {
+    let mut out = Vec::new();
+    let mut bad = Vec::new();
+    for part in s.split(',') {
+        let t = part.trim();
+        if t.is_empty() {
+            continue;
+        }
+        match t.parse::<usize>() {
+            Ok(n) if n > 0 => out.push(n),
+            _ => bad.push(t.to_string()),
+        }
+    }
+    if out.is_empty() {
+        return Err(format!("--k '{}' tidak menghasilkan nilai K valid (contoh: 10,20,50)", s));
+    }
+    if !bad.is_empty() {
+        log::warn!("eval: skipping invalid K values: {:?}", bad);
+    }
+    out.sort_unstable();
+    out.dedup();
+    Ok(out)
+}
+
+/// F8.4: parse isi file ranked untuk `wordlist eval`.
+/// Baris didukung: `pass<TAB>skor` (output rank), `pass: skor` (output
+/// --ml-score), atau `pass` polos (skor 0). Baris kosong dilewati.
+pub fn parse_ranked_lines(raw: &str) -> Vec<(String, f64)> {
+    let mut ranked = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let (p, s) = if let Some((a, b)) = line.split_once('\t') {
+            (a.trim(), b.trim().split_whitespace().next().unwrap_or("0"))
+        } else if let Some((a, b)) = line.split_once(':') {
+            (a.trim(), b.trim().split_whitespace().next().unwrap_or("0"))
+        } else {
+            (line, "0")
+        };
+        if p.is_empty() {
+            continue;
+        }
+        ranked.push((p.to_string(), s.parse::<f64>().unwrap_or(0.0)));
+    }
+    ranked
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +260,30 @@ mod tests {
         let mc = train_family();
         assert_eq!(mc.complexity_score("admin01"), mc.complexity_score("admin01"));
         assert!(mc.complexity_score("admin01") < mc.complexity_score("xqzt!kvv9"));
+    }
+
+    #[test]
+    fn parse_k_list_ok_and_sorted_dedup() {
+        assert_eq!(parse_k_list("10,20,50").unwrap(), vec![10, 20, 50]);
+        assert_eq!(parse_k_list("50, 10,10,20 ").unwrap(), vec![10, 20, 50]);
+    }
+
+    #[test]
+    fn parse_k_list_rejects_garbage() {
+        assert!(parse_k_list("").is_err());
+        assert!(parse_k_list("0,abc").is_err());
+        // Campuran valid + sampah: valid lolos.
+        assert_eq!(parse_k_list("10,abc,20").unwrap(), vec![10, 20]);
+    }
+
+    #[test]
+    fn parse_ranked_lines_all_formats() {
+        let raw = "admin07\t9.61\nadmin08: 10.2\nplainpass\n\n:5\n";
+        let r = parse_ranked_lines(raw);
+        assert_eq!(r.len(), 3);
+        assert_eq!(r[0].0, "admin07");
+        assert!((r[0].1 - 9.61).abs() < 1e-9);
+        assert_eq!(r[1].0, "admin08");
+        assert_eq!(r[2], ("plainpass".to_string(), 0.0));
     }
 }

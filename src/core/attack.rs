@@ -97,7 +97,7 @@ impl AttackOrchestrator {
             session: None,
             output,
             rate_limiter: RateLimiter::new(config.rate_limit),
-            jitter: JitterDelay::new(config.delay, 100),
+            jitter: JitterDelay::new(config.delay, config.delay_jitter_ms),
             target_throttle,
             user_throttle,
             spray_cadence,
@@ -317,6 +317,57 @@ impl AttackOrchestrator {
         proxies
     }
 
+    /// ANON A3: pre-flight liveness concurrent untuk semua proxy terkonfigurasi
+    /// (5 dtk per proxy). Mati dibuang + warn; bila SEMUA mati → fail-closed.
+    /// `strict` (--check-proxy): abort bila ADA SATUPUN yang mati.
+    async fn preflight_proxies(
+        proxies: Vec<ProxyConfig>,
+        strict: bool,
+    ) -> Result<Vec<ProxyConfig>, AttackError> {
+        if proxies.is_empty() {
+            return Ok(proxies);
+        }
+        let checks: Vec<_> = proxies
+            .iter()
+            .map(|p| p.check_liveness(std::time::Duration::from_secs(5)))
+            .collect();
+        let outcomes = futures::future::join_all(checks).await;
+        let mut alive = Vec::new();
+        let mut dead = Vec::new();
+        for (proxy, outcome) in proxies.into_iter().zip(outcomes) {
+            match outcome {
+                Ok(note) => {
+                    log::info!("proxy alive: {}", note);
+                    alive.push(proxy);
+                }
+                Err(e) => {
+                    // display() tidak memuat kredensial — aman di-log.
+                    log::warn!("proxy dead, dropped: {}", e);
+                    dead.push(proxy.display());
+                }
+            }
+        }
+        if alive.is_empty() {
+            return Err(AttackError::config(format!(
+                "All {} configured prox(ies) unreachable ({}). Refusing to attack without egress cover.",
+                dead.len(),
+                dead.join(", ")
+            )));
+        }
+        if strict && !dead.is_empty() {
+            return Err(AttackError::config(format!(
+                "--check-proxy strict: {} of {} prox(ies) dead: {}",
+                dead.len(),
+                alive.len() + dead.len(),
+                dead.join(", ")
+            )));
+        }
+        if !dead.is_empty() {
+            log::warn!("preflight: {}/{} proxies alive", alive.len(), alive.len() + dead.len());
+        }
+        Ok(alive)
+    }
+
     pub async fn dry_run_preview(config: &AttackConfig) -> Result<AttackPlan, AttackError> {
         config.validate()?;
         // Estimasi target tanpa DNS: expand CIDR/range + parse + dedup.
@@ -346,6 +397,34 @@ impl AttackOrchestrator {
         if let Some(ref fp) = config.password_file {
             pass_count += count_lines_fast(fp).unwrap_or(0);
         }
+        // F8.1: dry-run HARUS memperhitungkan ekspansi --rule agar estimasi
+        // akurat (estimasi tanpa ekspansi = undercount brutal untuk audit).
+        let mut rule_note: Option<String> = None;
+        if config.rule_file.is_some() && config.combo_file.is_none() && pass_count > 0 {
+            if let Some(ref rp) = config.rule_file {
+                match super::rules::load_rules(rp) {
+                    Ok(rules) if !rules.is_empty() => {
+                        let est = super::rules::dry_count_rules(
+                            pass_count as usize,
+                            &rules,
+                            config.max_mutations,
+                        ) as u64;
+                        rule_note = Some(format!(
+                            "{} rule(s) expand {} base -> {} estimated (cap {})",
+                            rules.len(),
+                            pass_count,
+                            est,
+                            config.max_mutations
+                        ));
+                        pass_count = est.max(1);
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        rule_note = Some(format!("rules unloadable ({}), estimate is base only", e));
+                    }
+                }
+            }
+        }
         let cred_estimate = if let Some(ref fp) = config.combo_file {
             count_lines_fast(fp).unwrap_or(0).max(1)
         } else if config.single_user_mode {
@@ -369,7 +448,7 @@ impl AttackOrchestrator {
             config.threads,
             config.timeout,
             config.rate_limit,
-        ))
+        ).with_note(rule_note.unwrap_or_default()))
     }
 
     pub async fn run(&mut self) -> AttackSummary {
@@ -379,7 +458,19 @@ impl AttackOrchestrator {
         // Fase 1: dry-run keluar sebelum network I/O apapun.
         if self.config.dry_run {
             match Self::dry_run_preview(&self.config).await {
-                Ok(plan) => {
+                Ok(mut plan) => {
+                    // ANON: jujur — dry-run tidak menyentuh proxy sama sekali.
+                    if self.config.proxy.is_some()
+                        || self.config.proxy_file.is_some()
+                        || self.config.proxy_chain.is_some()
+                    {
+                        let extra = "proxy configured but NOT liveness-checked in dry-run (no packets sent)";
+                        plan.note = if plan.note.is_empty() {
+                            extra.to_string()
+                        } else {
+                            format!("{} | {}", plan.note, extra)
+                        };
+                    }
                     println!();
                     println!("  {} dry run, no packets sent", "DRY RUN:".bold().yellow());
                     println!("{}", plan.render());
@@ -462,6 +553,14 @@ impl AttackOrchestrator {
         };
         self.credentials = credentials;
         self.proxies = Self::load_proxies(&self.config);
+        // ANON A3: jangan serang lewat proxy mati.
+        match Self::preflight_proxies(std::mem::take(&mut self.proxies), self.config.check_proxy).await {
+            Ok(alive) => self.proxies = alive,
+            Err(e) => {
+                log::error!("Proxy preflight failed: {}", e);
+                return empty_summary(start_time);
+            }
+        }
 
         let cred_before_dedup = self.credentials.len();
         let mut seen: DedupSet<(String, String)> = DedupSet::with_capacity(self.credentials.len());

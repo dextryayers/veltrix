@@ -25,6 +25,22 @@ pub async fn load_wordlist(path: &Path) -> Result<Vec<String>, AttackError> {
     Ok(lines)
 }
 
+/// F9.2: parser combo-line tunggal, murni dan fuzzable.
+/// `user:pass` per baris; password boleh mengandung ':' (split pertama).
+/// Komentar '#' dan baris kosong/invalid -> None.
+pub fn parse_combo_line(line: &str) -> Option<(String, String)> {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return None;
+    }
+    let (user, pass) = line.split_once(':')?;
+    let (user, pass) = (user.trim(), pass.trim());
+    if user.is_empty() || pass.is_empty() {
+        return None;
+    }
+    Some((user.to_string(), pass.to_string()))
+}
+
 pub async fn load_combo_list(path: &Path) -> Result<Vec<(String, String)>, AttackError> {
     let file = File::open(path).await
         .map_err(|e| AttackError::wordlist(path.to_path_buf(), e.to_string()))?;
@@ -39,13 +55,8 @@ pub async fn load_combo_list(path: &Path) -> Result<Vec<(String, String)>, Attac
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let parts: Vec<&str> = line.splitn(2, ':').collect();
-        if parts.len() == 2 {
-            let user = parts[0].trim().to_string();
-            let pass = parts[1].trim().to_string();
-            if !user.is_empty() && !pass.is_empty() {
-                combos.push((user, pass));
-            }
+        if let Some((user, pass)) = parse_combo_line(&line) {
+            combos.push((user, pass));
         }
     }
     log::info!("Loaded {} combos from {}", combos.len(), path.display());
@@ -126,14 +137,8 @@ impl StreamingComboList {
                 Ok(0) => { self.exhausted = true; break; }
                 Ok(_) => {
                     let line = line.trim().to_string();
-                    if line.is_empty() || line.starts_with('#') { continue; }
-                    let parts: Vec<&str> = line.splitn(2, ':').collect();
-                    if parts.len() == 2 {
-                        let user = parts[0].trim().to_string();
-                        let pass = parts[1].trim().to_string();
-                        if !user.is_empty() && !pass.is_empty() {
-                            self.buffer.push(Credential::new(user, pass));
-                        }
+                    if let Some((user, pass)) = parse_combo_line(&line) {
+                        self.buffer.push(Credential::new(user, pass));
                     }
                 }
                 Err(e) => return Err(AttackError::wordlist(
@@ -242,5 +247,68 @@ mod tests {
     async fn test_load_nonexistent_file() {
         let result = load_wordlist(std::path::Path::new("/nonexistent/file.txt")).await;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_combo_line_unit() {
+        assert_eq!(
+            parse_combo_line("admin:password"),
+            Some(("admin".into(), "password".into()))
+        );
+        // Password boleh mengandung ':' (split pertama saja).
+        assert_eq!(
+            parse_combo_line("user:pass:word"),
+            Some(("user".into(), "pass:word".into()))
+        );
+        assert!(parse_combo_line("").is_none());
+        assert!(parse_combo_line("# comment").is_none());
+        assert!(parse_combo_line("admin:").is_none());
+        assert!(parse_combo_line(":password").is_none());
+        assert!(parse_combo_line("nocolon").is_none());
+    }
+}
+
+#[cfg(test)]
+mod fuzz_tests {
+    use super::*;
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            x
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+    }
+
+    // F9.2: combo parser tidak boleh panic untuk byte/fragmen apapun, dan
+    // properti roundtrip: hasil parse selalu join kembali ke input (trimmed).
+    const FRAG: &[&str] = &["a", ":", "::", "#", " ", "\t", "admin", "p@ss", "\u{00e9}", "\u{1f600}", "\n", "\r"];
+
+    #[test]
+    fn fuzz_combo_parse_never_panics() {
+        let mut rng = Rng(0xC0880);
+        for _ in 0..5000 {
+            let n = 1 + rng.below(6);
+            let mut s = String::new();
+            for _ in 0..n {
+                s.push_str(FRAG[rng.below(FRAG.len())]);
+            }
+            let r = parse_combo_line(&s);
+            if let Some((u, p)) = r {
+                assert!(!u.is_empty() && !p.is_empty());
+                // User adalah pre-first-colon: tidak pernah mengandung ':'.
+                assert!(!u.contains(':'));
+                // Join kembali mengandung kredensial utuh.
+                assert!(s.contains(&u));
+                assert!(s.contains(&p));
+            }
+        }
     }
 }

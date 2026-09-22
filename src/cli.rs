@@ -213,12 +213,17 @@ pub enum Commands {
     Man,
     #[command(about = "Alias for man — display full user manual")]
     How,
+
+    #[command(about = "Check egress IP via proxy (or direct): verify your cover before attacking")]
+    CheckIp(CheckIpArgs),
 }
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum WordlistCommand {
     #[command(about = "Rank candidates probable-first using a Markov model trained on a wordlist")]
     Rank(RankArgs),
+    #[command(about = "Evaluate a ranked list: precision@K against a held-out relevant set (F8.4, angka bukan klaim)")]
+    Eval(EvalArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -246,6 +251,27 @@ pub struct RankArgs {
 
     #[arg(short = 'o', long = "output", help = "Output file (default: stdout)", value_name = "FILE")]
     pub output: Option<PathBuf>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct EvalArgs {
+    #[arg(long = "ranked", help = "Ranked list file from `wordlist rank` (format: password<TAB>score, most-probable first)", value_name = "FILE")]
+    pub ranked: PathBuf,
+
+    #[arg(long = "relevant", help = "Held-out relevant passwords file (one per line, e.g. real leaks for the target profile)", value_name = "FILE")]
+    pub relevant: PathBuf,
+
+    #[arg(long = "k", help = "Comma-separated K values for precision@K (e.g. 10,20,50,100)", value_name = "LIST", default_value = "10,20,50")]
+    pub k: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct CheckIpArgs {
+    #[arg(long = "timeout", help = "Egress check timeout in seconds", value_name = "SEC", default_value = "10")]
+    pub timeout: u64,
+
+    #[arg(long = "url", help = "IP echo service URL (must return plain-text IP)", value_name = "URL", default_value = "https://api.ipify.org")]
+    pub url: String,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -560,6 +586,12 @@ pub struct Cli {
     #[arg(long = "rotate-proxy-every", help = "Rotate egress proxy every N attempts (0 = only on signal)", value_name = "N", default_value = "0", global = true)]
     pub rotate_proxy_every: usize,
 
+    #[arg(long = "random-delay", help = "Extra random delay 0..N ms on top of --delay per attempt (anti-rhythm fingerprinting)", value_name = "MS", default_value = "100", global = true)]
+    pub random_delay: u64,
+
+    #[arg(long = "check-proxy", help = "Pre-flight check: TCP-test every configured proxy and drop dead ones before attacking (fail-closed if all dead)", global = true)]
+    pub check_proxy: bool,
+
     #[arg(long = "source-ip", help = "Bind egress sockets to this local IP (VPN/multihomed anonymity)", value_name = "IP", global = true)]
     pub source_ip: Option<String>,
 
@@ -734,6 +766,8 @@ impl Cli {
             proxy_required: self.proxy_required,
             rotate_proxy_every: self.rotate_proxy_every,
             source_ip,
+            delay_jitter_ms: self.random_delay,
+            check_proxy: self.check_proxy,
             output_file: self.output.clone(),
             output_format: OutputFormat::from_str(&self.format),
             resume_file: self.resume.clone(),

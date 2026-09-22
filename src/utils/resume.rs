@@ -94,6 +94,16 @@ impl SessionState {
             .map_err(|e| AttackError::session(format!("File serialization: {}", e)))?;
         std::fs::write(path, json)
             .map_err(|e| AttackError::session(format!("Write failed: {}", e)))?;
+        // F9.4: session berisi kredensial plaintext (combos_tested, successes).
+        // Kunci 0600 agar tidak terbaca user lain di mesin bersama.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perm = std::fs::Permissions::from_mode(0o600);
+            if let Err(e) = std::fs::set_permissions(path, perm) {
+                log::warn!("Cannot chmod 600 {}: {}", path.display(), e);
+            }
+        }
         log::debug!("Session saved with integrity hash to {}", path.display());
         Ok(())
     }

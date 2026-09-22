@@ -168,6 +168,37 @@ impl ProxyConfig {
             ProxyConfig::None => 0,
         }
     }
+
+    /// ANON A3: pre-flight liveness — TCP connect ke endpoint proxy itu
+    /// sendiri (tanpa kredensial target, tanpa traffic attack). Chain dicek
+    /// per-hop. Ok(endpoint-tanpa-kredensial) bila hidup.
+    pub async fn check_liveness(&self, timeout: Duration) -> Result<String, String> {
+        match self {
+            ProxyConfig::None => Ok("direct (no proxy)".into()),
+            ProxyConfig::Chain { proxies } => {
+                if proxies.is_empty() {
+                    return Err("empty proxy chain".into());
+                }
+                for hop in proxies {
+                    if matches!(hop, ProxyConfig::Chain { .. }) {
+                        return Err("nested proxy chain not supported".into());
+                    }
+                    check_endpoint(hop.host(), hop.port(), timeout, &hop.display()).await?;
+                }
+                Ok(format!("chain({} hops alive)", proxies.len()))
+            }
+            _ => check_endpoint(self.host(), self.port(), timeout, &self.display()).await,
+        }
+    }
+}
+
+/// TCP connect murni ke endpoint proxy (tanpa auth, tanpa identitas target).
+async fn check_endpoint(host: &str, port: u16, timeout: Duration, label: &str) -> Result<String, String> {
+    let endpoint = format!("{}:{}", host, port);
+    crate::protocols::tcp::connect_bound(&endpoint, timeout)
+        .await
+        .map(|_| label.to_string())
+        .map_err(|e| format!("{} unreachable: {}", label, e))
 }
 
 fn parse_auth(auth: Option<&str>) -> (Option<String>, Option<String>) {

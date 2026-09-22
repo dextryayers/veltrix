@@ -214,6 +214,8 @@ mod tests {
             proxy_required: false,
             rotate_proxy_every: 0,
             source_ip: None,
+            delay_jitter_ms: 100,
+            check_proxy: false,
             show_secrets: false,
         }
     }

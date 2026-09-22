@@ -27,6 +27,7 @@ pub fn load_binary<T: DeserializeOwned>(path: &Path) -> Result<T, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     struct TestData {

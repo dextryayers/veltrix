@@ -1,38 +1,46 @@
 # Veltrix Rule File — Hybrid Attack Mutation Rules
-# Format: <operation>[argument]
-# Operations:
-#   $<n>    — append number 0..n
-#   ^<n>    — prepend number 0..n
-#   @<str>  — append string
-#   !<str>  — prepend string
-#   ~<n>    — capitalize (0=lower, 1=upper, 2=title)
-#   &<from>:<to> — leet speak substitution
+# Format: token dipisah spasi, `#` mulai komentar.
+# Operasi (lihat src/core/rules.rs untuk definisi eksak):
+#   $<n>       — append angka 0..=n  (mis. `$9` -> pass0..pass9; HATI-HATI:
+#                `$2024` berarti 2025 mutasi, BUKAN literal "2024")
+#   ^<n>       — prepend angka 0..=n
+#   @<str>     — append string LITERAL (mis. `@2024` -> pass2024)
+#   !<str>     — prepend string LITERAL
+#   ~<n>       — case (0=lower, 1=UPPER, 2=Title)
+#   &<from>:<to> — leet substitution (mis. `&a:4`)
+#   D          — duplicate (pass -> passpass)
+#   R          — reverse (pass -> ssap)
+#   T<n>       — truncate ke n char pertama (mis. `T4`)
 #
-# Order: rules are applied sequentially per word
+# Aturan: pakai `@`/`!` untuk literal tahun/string, `$`/`^` hanya untuk
+# range angka KECIL. Total ekspansi selalu dibatasi --max-mutations.
+# Order: rules diaplikasikan sekuensial per kata.
 
-# ── Year suffixes ──
-$2024
-$2025
-$2026
-$2023
-$2020
-$2019
-$2018
-$2017
-$2016
-$2015
-$2024!
+# ── Year suffixes (literal!) ──
+@2023
+@2024
+@2025
+@2026
+@2020
+@2019
+@2018
+@123
+@1234
+@123456
+
+# ── Small numeric ranges (hati-hati: $9 = 10 mutasi per kata) ──
+$9
+^9
 
 # ── Common appends ──
-@123
-@123456
-@1234
 @1
 @!
-@2024
+@!!
+@#
 @admin
 @pass
 @me
+@qwerty
 
 # ── Common prepends ──
 !admin
@@ -54,3 +62,8 @@ $2024!
 &s:$
 &s:5
 &t:7
+
+# ── Shape ops ──
+D
+R
+T8

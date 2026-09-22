@@ -150,19 +150,59 @@ pub fn load_rules(path: &Path) -> Result<Vec<Rule>, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read rules file: {}", e))?;
     let mut rules = Vec::new();
+    let mut skipped = 0usize;
     for line in content.lines() {
-        if let Some(rule) = parse_rule_line(line) {
-            rules.push(rule);
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
         }
+        match parse_rule_line(t) {
+            Some(rule) => {
+                // Guard pro: `$2024` = 2025 mutasi, hampir pasti maksudnya
+                // literal `@2024`. Jangan gagal, tapi beri tahu operator.
+                for op in &rule.ops {
+                    if let RuleOp::AppendNumber(n) | RuleOp::PrependNumber(n) = op {
+                        if *n > 366 {
+                            log::warn!(
+                                "rules: range ${} expands to {} mutations per word; \
+                                 if you meant literal \"{}\", use @{}$ instead",
+                                n,
+                                n + 1,
+                                n,
+                                n
+                            );
+                            break;
+                        }
+                    }
+                }
+                rules.push(rule);
+            }
+            None => {
+                skipped += 1;
+                log::warn!("rules: skipping unparsable line: {:?}", t);
+            }
+        }
+    }
+    if skipped > 0 {
+        log::warn!("rules: {} invalid line(s) skipped in {}", skipped, path.display());
     }
     Ok(rules)
 }
 
 pub fn apply_rules(base_words: &[String], rules: &[Rule], max_mutations: usize) -> Vec<String> {
-    let mut result: Vec<String> = base_words.to_vec();
+    if max_mutations == 0 {
+        return Vec::new();
+    }
+    if rules.is_empty() {
+        let mut out = base_words.to_vec();
+        out.truncate(max_mutations);
+        return out;
+    }
+    // Rantai mutasi sekuensial (replace) seperti sebelumnya...
+    let mut chained: Vec<String> = base_words.to_vec();
     for rule in rules {
         let mut new_words: Vec<String> = Vec::new();
-        for word in &result {
+        for word in &chained {
             let mutations = rule.apply(word);
             new_words.extend(mutations);
             if new_words.len() >= max_mutations {
@@ -170,28 +210,51 @@ pub fn apply_rules(base_words: &[String], rules: &[Rule], max_mutations: usize) 
                 break;
             }
         }
-        result = new_words;
-        if result.len() >= max_mutations {
-            result.truncate(max_mutations);
+        chained = new_words;
+        if chained.len() >= max_mutations {
+            chained.truncate(max_mutations);
             break;
+        }
+    }
+    // ...tapi kata dasar SELALU dipertahankan paling depan (paling probable).
+    // Tanpa ini, password mentah tidak pernah dicoba saat --rule dipakai.
+    let mut seen = std::collections::HashSet::with_capacity(base_words.len() + chained.len());
+    let mut result = Vec::with_capacity(max_mutations.min(base_words.len() + chained.len()));
+    for w in base_words.iter().chain(chained.iter()) {
+        if seen.insert(w.as_str()) {
+            result.push(w.clone());
+            if result.len() >= max_mutations {
+                break;
+            }
         }
     }
     result
 }
 
 /// Estimasi akurat jumlah mutasi TANPA ekspansi (F8.1 dry count).
-/// Mengembalikan min(estimasi eksak, max_mutations) per aturan berantai,
-/// sama persis dengan batas yang dipakai apply_rules.
+/// Model: base dipertahankan + rantai replace per aturan, dipotong
+/// max_mutations — sama persis dengan batas yang dipakai apply_rules.
+/// Eksak bila tidak ada tabrakan string (kasus umum); bila ada tabrakan,
+/// estimasi sedikit di atas aktual (aman untuk perencanaan, tidak undercount).
 pub fn dry_count_rules(base_count: usize, rules: &[Rule], max_mutations: usize) -> usize {
-    let mut count = base_count as u64;
+    if max_mutations == 0 {
+        return 0;
+    }
+    if rules.is_empty() {
+        return base_count.min(max_mutations);
+    }
+    let mut chained = base_count as u64;
     for rule in rules {
-        let factor: u64 = rule.ops.iter().map(op_factor).product();
-        count = count.saturating_mul(factor).min(max_mutations as u64);
-        if count >= max_mutations as u64 {
+        // fold saturating: product() polos bisa overflow-panic di debug
+        // untuk baris seperti `$99999 $99999`.
+        let factor: u64 = rule.ops.iter().map(op_factor).fold(1u64, |a, b| a.saturating_mul(b));
+        chained = chained.saturating_mul(factor).min(max_mutations as u64);
+        if chained >= max_mutations as u64 {
             break;
         }
     }
-    count as usize
+    // Union base + chained (asumsi tanpa tabrakan), dipotong cap.
+    (base_count as u64 + chained).min(max_mutations as u64) as usize
 }
 
 #[cfg(test)]
@@ -320,7 +383,20 @@ mod tests {
         let est = dry_count_rules(base.len(), &rules, 10_000);
         let actual = apply_rules(&base, &rules, 10_000).len();
         assert_eq!(est, actual);
-        assert_eq!(est, 30);
+        // 3 kata dasar dipertahankan + 30 rantai (3x10x1x1).
+        assert_eq!(est, 33);
+    }
+
+    #[test]
+    fn test_base_words_always_kept() {
+        // Tanpa union, "password" mentah hilang saat --rule dipakai.
+        let rules = vec![parse_rule_line("@123").unwrap()];
+        let base = vec!["password".to_string()];
+        let out = apply_rules(&base, &rules, 10_000);
+        assert!(out.contains(&"password".to_string()));
+        assert!(out.contains(&"password123".to_string()));
+        // Kata dasar paling depan = dicoba paling dulu.
+        assert_eq!(out[0], "password");
     }
 
     #[test]
@@ -378,15 +454,17 @@ mod fuzz_tests {
 
     #[test]
     fn fuzz_rule_apply_bounded() {
-        // Aturan dari token kecil: ekspansi harus eksak sama dengan dry count.
+        // Aturan dari token kecil: ekspansi apply_rules harus sama dengan
+        // dry count bila tidak ada tabrakan (atau dry sedikit di atas).
         let mut rng = Rng(0xA991);
         for _ in 0..500 {
             let line = format!("${} @{}{}", rng.below(4), "x", rng.below(3));
             if let Some(rule) = parse_rule_line(&line) {
                 let base = vec!["pw".to_string()];
-                let actual = rule.apply(&base[0]).len();
+                let actual = apply_rules(&base, &[rule.clone()], usize::MAX / 2).len();
                 let est = dry_count_rules(1, &[rule], usize::MAX / 2);
-                assert_eq!(actual, est, "dry mismatch on {:?}", line);
+                assert!(est >= actual, "dry undercount on {:?}", line);
+                assert!(est - actual <= 1, "dry overcount too big on {:?}", line);
             }
         }
     }

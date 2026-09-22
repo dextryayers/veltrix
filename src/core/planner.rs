@@ -12,6 +12,8 @@ pub struct AttackPlan {
     pub rate_limit: Option<u64>,
     pub batch_size: usize,
     pub estimated_seconds: Option<f64>,
+    /// Catatan operator, mis. ringkasan ekspansi --rule (F8.1).
+    pub note: String,
 }
 
 impl AttackPlan {
@@ -34,7 +36,14 @@ impl AttackPlan {
             rate_limit,
             batch_size,
             estimated_seconds,
+            note: String::new(),
         }
+    }
+
+    /// Tambah catatan satu baris untuk dry-run (builder style).
+    pub fn with_note(mut self, note: String) -> Self {
+        self.note = note;
+        self
     }
 
     pub fn render(&self) -> String {
@@ -57,6 +66,9 @@ impl AttackPlan {
         }
         if self.total > 1_000_000 {
             out.push_str("\nWarning: >1M combinations. Consider --dry-run review, resume file, and safe rate limits.");
+        }
+        if !self.note.is_empty() {
+            out.push_str(&format!("\nRules: {}", self.note));
         }
         out
     }
@@ -117,5 +129,14 @@ mod tests {
         let small = AttackPlan::new(1, 10, 10, Duration::from_secs(5), None);
         let big = AttackPlan::new(100, 100_000, 50, Duration::from_secs(5), None);
         assert!(big.batch_size >= small.batch_size);
+    }
+
+    #[test]
+    fn plan_note_renders_rules_line() {
+        let p = AttackPlan::new(1, 10, 10, Duration::from_secs(5), None)
+            .with_note("2 rule(s) expand 3 base -> 33 estimated (cap 500)".into());
+        assert!(p.render().contains("Rules: 2 rule(s)"));
+        let plain = AttackPlan::new(1, 10, 10, Duration::from_secs(5), None);
+        assert!(!plain.render().contains("Rules:"));
     }
 }

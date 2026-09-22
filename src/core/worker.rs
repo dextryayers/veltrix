@@ -36,12 +36,23 @@ pub struct WorkerPool {
     // ANON: rotasi proxy terjadwal tiap N attempt (0 = hanya saat sinyal).
     rotation_every: usize,
     rotation_counter: Arc<AtomicU64>,
+    // ANON A3: health runtime — proxy yang beruntun gagal koneksi di-ban
+    // sementara agar egress tidak macet di jalur mati.
+    proxy_strikes: Arc<Vec<AtomicU64>>,
+    proxy_banned_until: Arc<dashmap::DashMap<usize, Instant>>,
 }
+
+/// Proxy yang beruntun gagal koneksi/Timeout sebanyak ini → di-ban sementara.
+const MAX_PROXY_STRIKES: u64 = 5;
+/// Lama ban proxy mati (detik).
+const PROXY_BAN_SECS: u64 = 60;
 
 impl WorkerPool {
     pub fn new(config: &AttackConfig, running: Arc<AtomicBool>, proxies: Vec<ProxyConfig>) -> Self {
         let proxy_count = proxies.len().max(1);
         let proxy_failures = Arc::new((0..proxy_count).map(|_| AtomicU64::new(0)).collect());
+        let proxy_strikes: Arc<Vec<AtomicU64>> =
+            Arc::new((0..proxy_count).map(|_| AtomicU64::new(0)).collect());
         WorkerPool {
             semaphore: Arc::new(Semaphore::new(config.threads)),
             running,
@@ -60,7 +71,15 @@ impl WorkerPool {
             target_cooldowns: Arc::new(dashmap::DashMap::new()),
             rotation_every: config.rotate_proxy_every,
             rotation_counter: Arc::new(AtomicU64::new(0)),
+            proxy_strikes: Arc::clone(&proxy_strikes),
+            proxy_banned_until: Arc::new(dashmap::DashMap::new()),
         }
+    }
+
+    /// Jumlah proxy yang sedang di-ban (observability).
+    pub fn banned_proxy_count(&self) -> usize {
+        let now = Instant::now();
+        self.proxy_banned_until.iter().filter(|r| *r.value() > now).count()
     }
 
     pub fn submit(&mut self, task: WorkerTask) {
@@ -92,6 +111,8 @@ impl WorkerPool {
         let target_cooldowns = Arc::clone(&self.target_cooldowns);
         let rotation_every = self.rotation_every;
         let rotation_counter = Arc::clone(&self.rotation_counter);
+        let proxy_strikes = Arc::clone(&self.proxy_strikes);
+        let proxy_banned_until = Arc::clone(&self.proxy_banned_until);
         let skipped = Arc::clone(&self.skipped_users);
         let target = task.target;
         let credential = task.credential;
@@ -160,14 +181,33 @@ impl WorkerPool {
 
             let mut last_result = None;
             let proxy_count = proxies.len();
+            // ANON A3: lewati proxy yang sedang di-ban (ban kedaluwarsa = hidup lagi).
+            let is_banned = |idx: usize| -> bool {
+                proxy_banned_until
+                    .get(&idx)
+                    .map(|r| *r > Instant::now())
+                    .unwrap_or(false)
+            };
+            let skip_banned = |mut idx: usize| -> usize {
+                if proxy_count == 0 {
+                    return idx;
+                }
+                for _ in 0..proxy_count {
+                    if !is_banned(idx) {
+                        return idx;
+                    }
+                    idx = (idx + 1) % proxy_count;
+                }
+                idx
+            };
             // ANON: slot awal dari counter global. Tanpa jadwal: semua task mulai
             // dari proxy[0]. Dengan --rotate-proxy-every N: tiap N task global
             // pindah ke proxy berikutnya, egress tersebar merata dan periodik.
             let mut proxy_idx: usize = if rotation_every > 0 && proxy_count > 0 {
                 let slot = rotation_counter.fetch_add(1, Ordering::Relaxed) as usize;
-                (slot / rotation_every) % proxy_count
+                skip_banned((slot / rotation_every) % proxy_count)
             } else {
-                0
+                skip_banned(0)
             };
             let mut current_proxy = if proxy_count == 0 {
                 None
@@ -190,6 +230,37 @@ impl WorkerPool {
                 let classified = crate::utils::patterns::classify_error(
                     result.error.as_deref(), result.success,
                 );
+
+                // ANON A3: health runtime. Gagal koneksi/Timeout beruntun pada
+                // proxy yang sama = jalur mati → strike; 5 strike = ban 60 dtk.
+                // Sukses me-reset strike (jalur terbukti hidup).
+                if proxy_count > 0 {
+                    use crate::utils::patterns::ResponseCategory as RC;
+                    match (&classified.category, result.success) {
+                        (_, true) => {
+                            proxy_strikes[proxy_idx].store(0, Ordering::Relaxed);
+                        }
+                        (RC::ConnectionError | RC::Timeout, false) => {
+                            let n = proxy_strikes[proxy_idx].fetch_add(1, Ordering::Relaxed) + 1;
+                            if n >= MAX_PROXY_STRIKES {
+                                proxy_banned_until.insert(
+                                    proxy_idx,
+                                    Instant::now() + Duration::from_secs(PROXY_BAN_SECS),
+                                );
+                                proxy_strikes[proxy_idx].store(0, Ordering::Relaxed);
+                                log::warn!(
+                                    "proxy[{}] banned {}s after {} consecutive connection failures",
+                                    proxy_idx,
+                                    PROXY_BAN_SECS,
+                                    MAX_PROXY_STRIKES
+                                );
+                                proxy_idx = skip_banned((proxy_idx + 1) % proxy_count);
+                                current_proxy = Some(proxies[proxy_idx].clone());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
 
                 if result.success {
                     // F3.5 fp-check: verifikasi ulang sekali untuk eliminasi false positive.
@@ -250,7 +321,7 @@ impl WorkerPool {
                 }
 
                 if crate::utils::patterns::should_rotate_proxy(&classified) && proxy_count > 0 {
-                    proxy_idx = (proxy_idx + 1) % proxy_count;
+                    proxy_idx = skip_banned((proxy_idx + 1) % proxy_count);
                     current_proxy = Some(proxies[proxy_idx].clone());
                     for f in proxy_fails.iter() {
                         f.fetch_add(1, Ordering::Relaxed);

@@ -155,11 +155,14 @@ fn clean_banner(raw: &[u8]) -> String {
 fn probe_for_port(port: u16) -> Option<Vec<u8>> {
     match port {
         21 => Some(b"SYST\r\nFEAT\r\n".to_vec()),
-        25 | 587 | 465 => Some(b"EHLO scan.veltrix.local\r\n".to_vec()),
+        25 | 587 | 465 => Some(b"EHLO mail.local\r\n".to_vec()),
         80 | 443 | 8080 | 8443 | 8000 | 8008 | 8009 => {
-            Some(
-                b"GET / HTTP/1.0\r\nHost: localhost\r\nUser-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0\r\nAccept: */*\r\n\r\n".to_vec()
-            )
+            // ANON: UA probe dirotasi dari pool realistis, jangan statis.
+            let ua = crate::protocols::transport::next_user_agent();
+            Some(format!(
+                "GET / HTTP/1.0\r\nHost: localhost\r\nUser-Agent: {}\r\nAccept: */*\r\n\r\n",
+                ua
+            ).into_bytes())
         }
         110 | 995 => Some(b"CAPA\r\n".to_vec()),
         143 | 993 => Some(b"a001 CAPABILITY\r\n".to_vec()),

@@ -36,6 +36,9 @@ impl RateLimiter {
     }
 }
 
+/// Jeda antar attempt: `base` (--delay) + uniform acak 0..=jitter
+/// (--random-delay, default 100 ms). Ritme mekanis murni (tanpa jitter)
+/// mudah di-fingerprint IDS; jitter acak memecah pola periodik.
 pub struct JitterDelay {
     base_delay: Duration,
     jitter_ms: u64,

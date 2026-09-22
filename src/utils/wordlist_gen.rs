@@ -174,24 +174,24 @@ fn insert(words: &mut BTreeSet<String>, stems: &[String], years: &[String], sepa
 
 fn extract_years(dob: &str) -> Vec<String> {
     let mut years = Vec::new();
-    if dob.is_empty() {
-        years.extend(["2024", "2025", "2026", "2027", "2028"].map(String::from));
-        return years;
-    }
-
-    let digits: String = dob.chars().filter(|c| c.is_ascii_digit()).collect();
-    if digits.len() >= 4 {
-        if let Ok(year) = digits[digits.len() - 4..].parse::<i32>() {
-            years.push(year.to_string());
-            years.push((year % 100).to_string());
-            years.push(format!("{:02}", year % 100));
-        }
-    }
-
-    if let Ok(month) = digits[..digits.len().saturating_sub(4)].parse::<i32>() {
-        if month >= 1 && month <= 12 {
-            years.push(format!("{:02}", month));
-            years.push(month.to_string());
+    if !dob.is_empty() {
+        // Kumpulkan SEMUA grup digit, ambil yang berbentuk tahun 1900-2100
+        // (mencakup "1990", "1990-05-14", "14/05/1990", "05051990").
+        let digits: Vec<char> = dob.chars().filter(|c| c.is_ascii_digit()).collect();
+        let s: String = digits.iter().collect();
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        while i + 4 <= bytes.len() {
+            let chunk = &s[i..i + 4];
+            if let Ok(y) = chunk.parse::<i32>() {
+                if (1900..=2100).contains(&y) {
+                    years.push(y.to_string());
+                    years.push(format!("{:02}", y % 100));
+                    i += 4;
+                    continue;
+                }
+            }
+            i += 1;
         }
     }
 
@@ -358,6 +358,21 @@ mod tests {
         for w in generate_wordlist(&c) {
             assert!(w.len() >= 8 && w.len() <= 12, "out of bounds: {}", w);
         }
+    }
+
+    #[test]
+    fn dob_year_extracted_from_common_formats() {
+        for dob in ["1990-05-14", "14/05/1990", "05051990", "1990", "born 1985!"] {
+            let y = extract_years(dob);
+            assert!(y.iter().any(|v| v == "1990" || v == "1985" || v == "90" || v == "85"),
+                "dob {:?} -> {:?}", dob, y);
+        }
+        // Tanpa DOB: fallback tahun berjalan.
+        let d = extract_years("");
+        assert!(d.contains(&"2025".to_string()));
+        // Tahun absurd tidak ikut.
+        let w = extract_years("0514");
+        assert!(!w.contains(&"514".to_string()));
     }
 
     #[test]
