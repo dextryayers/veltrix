@@ -561,6 +561,28 @@ impl AttackOrchestrator {
                 return empty_summary(start_time);
             }
         }
+        // ANON A5: DNS-leak honesty — nama host di-resolve oleh resolver LOKAL
+        // (trust-dns sistem), bukan lewat proxy. Siapa pun yang melihat DNS
+        // (resolver, network lokal) tahu KEMANA Anda menyerang, walau isi
+        // traffic tertutup proxy. Mitigasi: pakai IP literal, atau Tor dengan
+        // DNSPort + --proxy ke Tor.
+        if !self.proxies.is_empty() {
+            let hostnames: Vec<&str> = self
+                .targets
+                .iter()
+                .map(|t| t.host.as_str())
+                .filter(|h| h.parse::<std::net::IpAddr>().is_err())
+                .collect();
+            if !hostnames.is_empty() {
+                let shown: Vec<&&str> = hostnames.iter().take(5).collect();
+                log::warn!(
+                    "DNS-leak note: {} target hostname(s) resolved LOCALLY (not via proxy): {:?}{}. Contents are proxied, destinations are not.",
+                    hostnames.len(),
+                    shown,
+                    if hostnames.len() > 5 { " ..." } else { "" }
+                );
+            }
+        }
 
         let cred_before_dedup = self.credentials.len();
         let mut seen: DedupSet<(String, String)> = DedupSet::with_capacity(self.credentials.len());
@@ -1103,4 +1125,54 @@ pub fn load_only_open(
         )));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn local_proxy() -> (tokio::task::JoinHandle<()>, ProxyConfig) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let h = tokio::spawn(async move {
+            // Terima 1 koneksi preflight lalu selesai.
+            let _ = listener.accept().await;
+        });
+        let p = ProxyConfig::parse(&format!("socks5://127.0.0.1:{}", port)).unwrap();
+        (h, p)
+    }
+
+    fn dead_proxy() -> ProxyConfig {
+        ProxyConfig::parse("socks5://127.0.0.1:59999").unwrap()
+    }
+
+    #[tokio::test]
+    async fn preflight_all_dead_fails_closed() {
+        let r = AttackOrchestrator::preflight_proxies(vec![dead_proxy()], false).await;
+        assert!(r.is_err(), "all-dead proxies must fail closed");
+    }
+
+    #[tokio::test]
+    async fn preflight_drops_dead_keeps_alive() {
+        let (h, alive) = local_proxy().await;
+        let r = AttackOrchestrator::preflight_proxies(vec![dead_proxy(), alive], false)
+            .await
+            .unwrap();
+        assert_eq!(r.len(), 1);
+        let _ = h.await;
+    }
+
+    #[tokio::test]
+    async fn preflight_strict_rejects_partial() {
+        let (h, alive) = local_proxy().await;
+        let r = AttackOrchestrator::preflight_proxies(vec![alive, dead_proxy()], true).await;
+        assert!(r.is_err(), "--check-proxy must abort on any dead proxy");
+        let _ = h.await;
+    }
+
+    #[tokio::test]
+    async fn preflight_empty_is_ok() {
+        let r = AttackOrchestrator::preflight_proxies(vec![], false).await.unwrap();
+        assert!(r.is_empty());
+    }
 }

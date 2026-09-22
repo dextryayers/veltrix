@@ -698,6 +698,36 @@ mod tests {
 
         std::fs::remove_file(&path).ok();
     }
+
+    #[test]
+    fn test_display_redacts_credentials() {
+        // ANON A5: display TIDAK BOLEH memuat kredensial proxy.
+        let p = ProxyConfig::parse("socks5://user:secret@10.0.0.1:9050").unwrap();
+        assert_eq!(p.display(), "socks5://10.0.0.1:9050");
+        assert!(!p.display().contains("secret"));
+        let h = ProxyConfig::parse("http://admin:p4ss@proxy.com:3128").unwrap();
+        assert!(!h.display().contains("p4ss"));
+    }
+
+    #[tokio::test]
+    async fn test_check_liveness_alive_and_dead() {
+        use std::time::Duration;
+        // Listener lokal = proxy "hidup" (TCP connect sukses).
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let accept = tokio::spawn(async move {
+            let _ = listener.accept().await;
+        });
+        let alive = ProxyConfig::parse(&format!("socks5://127.0.0.1:{}", port)).unwrap();
+        assert!(alive.check_liveness(Duration::from_secs(3)).await.is_ok());
+        let _ = accept.await;
+
+        // Port tertutup = mati.
+        let dead = ProxyConfig::parse("socks5://127.0.0.1:59999").unwrap();
+        let err = dead.check_liveness(Duration::from_secs(2)).await.unwrap_err();
+        assert!(err.contains("unreachable"));
+        assert!(!err.contains("secret"), "liveness error must not leak creds");
+    }
 }
 
 pub fn load_proxy_list(path: &std::path::Path) -> Result<Vec<ProxyConfig>, AttackError> {
