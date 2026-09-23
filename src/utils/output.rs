@@ -343,10 +343,11 @@ impl LiveDashboard {
         }
 
         self.set_status(format!(
-            "{}:{} [{}:{}] ({})",
+            "{}:{} [{}:{}] ({}) [{}/{}]",
             result.target_host, result.target_port,
             result.username, shown_pw,
             if result.success { "OK" } else { "FAIL" },
+            self.total_attempts, self.total_estimate,
         ));
 
         self.update_progress();
